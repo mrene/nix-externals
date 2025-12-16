@@ -13,6 +13,7 @@ in
   imports = [
     ./providers/external.nix
     ./providers/exec.nix
+    ./providers/fetch-tree.nix
   ];
 
   options.futures.stateDir = lib.mkOption {
