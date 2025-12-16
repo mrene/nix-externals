@@ -10,7 +10,10 @@ let
   providerNames = lib.attrNames providers;
 in
 {
-  imports = [ ./providers/external.nix ];
+  imports = [
+    ./providers/external.nix
+    ./providers/exec.nix
+  ];
 
   options.futures.stateDir = lib.mkOption {
     type = lib.types.path;

@@ -18,11 +18,17 @@
       imports = [ inputs.nix-futures.flakeModule ];
 
       perSystem =
-        { ... }:
+        { pkgs, ... }:
         {
           futures.stateDir = ./_futures;
           futures.external.greeting.input = { };
           futures.external.pending.input = { };
+          futures.exec.test-gen.input = [
+            (pkgs.writeShellScriptBin "generate" ''
+              echo "generating config..."
+              echo '{ message = "hello from exec"; }' > config.nix
+            '')
+          ];
         };
     };
 }

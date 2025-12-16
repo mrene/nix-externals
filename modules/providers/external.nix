@@ -38,17 +38,14 @@ in
       notReadyList = lib.attrNames notReady;
     in
     pkgs.writeShellScript "poll-external" ''
-      echo "External provider status:"
+      echo "External provider:"
       ${
         if notReadyList == [ ] then
-          ''echo "All futures ready!"''
+          ''echo "  All ready"''
         else
-          ''
-            echo "Futures not ready:"
-            ${lib.concatMapStringsSep "\n" (
-              name: ''echo "  - ${name}: create $STATE_DIR/external/${name}.nix"''
-            ) notReadyList}
-          ''
+          lib.concatMapStringsSep "\n" (
+            name: ''echo "  ${name}: create $STATE_DIR/external/${name}.nix"''
+          ) notReadyList
       }
     '';
 }
