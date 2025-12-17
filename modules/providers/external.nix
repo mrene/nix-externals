@@ -7,7 +7,7 @@
 }:
 let
   futures = import ../../lib { inherit lib; };
-  stateDir = config.futures.stateDir + "/external";
+  stateDir = "${config.futures.stateDir}/external";
 in
 {
   options.futures.external = lib.mkOption {
@@ -37,7 +37,7 @@ in
       notReady = lib.filterAttrs (_: cfg: !cfg.ready) allFutures;
       notReadyList = lib.attrNames notReady;
     in
-    pkgs.writeShellScript "poll-external" ''
+    pkgs.writeShellScriptBin "poll-external" ''
       echo "External provider:"
       ${
         if notReadyList == [ ] then

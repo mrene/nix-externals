@@ -4,7 +4,11 @@
   # valueType: type of the output value (optional, defaults to anything)
   # mkConfig: { name } -> { ready, value } - provider logic for resolution
   mkProvider =
-    { inputType, valueType ? lib.types.anything, mkConfig }:
+    {
+      inputType,
+      valueType ? lib.types.anything,
+      mkConfig,
+    }:
     let
       futureSubmodule =
         { name, ... }:

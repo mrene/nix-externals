@@ -7,7 +7,7 @@
 }:
 let
   futures = import ../../lib { inherit lib; };
-  stateDir = config.futures.stateDir + "/exec";
+  stateDir = "${config.futures.stateDir}/exec";
 in
 {
   options.futures.exec = lib.mkOption {
@@ -39,7 +39,8 @@ in
       notReady = lib.filterAttrs (_: cfg: !cfg.ready) allFutures;
       notReadyNames = lib.attrNames notReady;
     in
-    pkgs.writeShellScript "poll-exec" ''
+    pkgs.writeShellScriptBin "poll-exec" ''
+      set -e
       echo "Exec provider:"
       ${
         if notReadyNames == [ ] then

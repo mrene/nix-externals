@@ -214,8 +214,8 @@ let
         # attrTag sets exactly one attribute
         typeName = lib.head (lib.attrNames input);
         attrs = input.${typeName};
-        # Filter out empty strings (defaults) and internal attrs
-        cleanAttrs = lib.filterAttrs (n: v: v != "" && n != "_module") attrs;
+        # Filter out empty string defaults (not booleans/other types) and internal attrs
+        cleanAttrs = lib.filterAttrs (n: v: !(lib.isString v && v == "") && n != "_module") attrs;
       in
       cleanAttrs // { type = typeName; };
 
@@ -273,7 +273,7 @@ in
   ) fetchTreeFutures;
 
   # fetch-tree's poll is a no-op since exec handles it
-  config.futures.fetch-tree.poll = pkgs.writeShellScript "poll-fetch-tree" ''
+  config.futures.fetch-tree.poll = pkgs.writeShellScriptBin "poll-fetch-tree" ''
     echo "Fetch-tree provider:"
     echo "  (delegated to exec)"
   '';

@@ -19,6 +19,8 @@
 
         imports = [ inputs.nix-futures.flakeModule ];
 
+        debug = true;
+
         perSystem =
           { pkgs, config, ... }:
           {

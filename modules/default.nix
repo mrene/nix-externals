@@ -14,6 +14,7 @@ in
     ./providers/external.nix
     ./providers/exec.nix
     ./providers/fetch-tree.nix
+    ./providers/npins.nix
   ];
 
   options.futures.stateDir = lib.mkOption {
@@ -37,6 +38,7 @@ in
   };
 
   config.futures.poll = pkgs.writeShellScriptBin "futures-poll" ''
+    set -e
     ${config.futures.pollPrelude}
 
     ${lib.concatMapStringsSep "\n" (
@@ -44,7 +46,7 @@ in
       # bash
       ''
         echo "Polling: ${name}"
-        ${providers.${name}.poll}
+        ${lib.getExe providers.${name}.poll}
         echo ""
       '') providerNames}
   '';
