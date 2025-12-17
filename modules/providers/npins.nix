@@ -7,8 +7,6 @@
   ...
 }:
 let
-  futures = import ../../lib { inherit lib; };
-
   # Freeform type for extra flags (string or bool values)
   extraFlagsType = lib.types.attrsOf (lib.types.either lib.types.str lib.types.bool);
 
@@ -152,6 +150,11 @@ in
           readOnly = true;
           description = "Package that polls/adds missing npins";
         };
+        package = lib.mkOption {
+          type = lib.types.package;
+          default = pkgs.npins;
+          description = "The npins package to use for managing pins";
+        };
       };
       freeformType = lib.types.attrsOf (
         lib.types.submodule (
@@ -206,7 +209,7 @@ in
             in
             ''
               echo -n "  ${name}: "
-              ${lib.getExe pkgs.npins} add ${addCmd} --name ${name} -d ${npinsDir}
+              ${lib.getExe config.futures.npins.package} add ${addCmd} --name ${name} -d ${npinsDir}
               echo "done"
             ''
           ) notReadyNames

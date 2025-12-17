@@ -12,7 +12,7 @@ in
 {
   options.futures.exec = lib.mkOption {
     type = futures.mkProvider {
-      inputType = lib.types.listOf lib.types.package;
+      inputType = lib.types.either lib.types.str lib.types.package;
       valueType = lib.types.path;
       mkConfig =
         { name }:
@@ -49,14 +49,16 @@ in
           lib.concatMapStringsSep "\n" (
             name:
             let
-              executables = allFutures.${name}.input;
+              input = allFutures.${name}.input;
+              executable =
+                if builtins.isString input then pkgs.writeShellScriptBin "exec-${name}" input else input;
               futureDir = "$STATE_DIR/exec/${name}";
             in
             ''
               echo -n "  ${name}: "
               mkdir -p ${futureDir}
               cd ${futureDir}
-              if ${lib.concatMapStringsSep " && " (exe: ''${lib.getExe exe}'') executables}; then
+              if ${lib.getExe executable}; then
                 touch ${futureDir}/.ready
                 echo "done"
               else
