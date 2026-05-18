@@ -29,7 +29,7 @@ lib.evalModules {
 }
 ```
 
-The flake-parts module computes the runtime `STATE_DIR` via `flake-root`, so the poll script writes into the live working tree rather than the store-resolved source. Outside flake-parts the default `pollPrelude` uses `toString config.externals.stateDir` directly — fine when `stateDir` is an absolute path.
+`externals.stateDir` accepts either a bare path or a submodule split into `evalPath` (used for `pathExists` checks during Nix evaluation) and `runtimePath` (a shell expression resolved at runtime to the writable state location). The flake-parts entry overrides `runtimePath` to use `flake-root`, so producers write into the live working tree rather than the store-staged source. Bare-path consumers don't need to think about this — the default `runtimePath` derives from `evalPath` directly.
 
 ## Example
 
@@ -120,8 +120,8 @@ externals.producers.my-thing = pkgs.writeShellApplication {
 };
 
 # At your use site:
-myValue = if builtins.pathExists "${config.externals.stateDir}/my-thing/.ready"
-  then import "${config.externals.stateDir}/my-thing/result.nix"
+myValue = if builtins.pathExists "${toString config.externals.stateDir.evalPath}/my-thing/.ready"
+  then import "${toString config.externals.stateDir.evalPath}/my-thing/result.nix"
   else throw "my-thing not ready, run 'nix run .#externals-poll'";
 ```
 
@@ -132,7 +132,7 @@ A provider is an ordinary NixOS module. Define an option tree for typed declarat
 ```nix
 { lib, config, pkgs, ... }:
 let
-  stateDir = "${toString config.externals.stateDir}/hostkey";
+  stateDir = "${toString config.externals.stateDir.evalPath}/hostkey";
 
   mkSubmodule = { name, ... }: let
     file = stateDir + "/${name}";

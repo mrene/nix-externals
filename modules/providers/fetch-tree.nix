@@ -6,7 +6,7 @@
   ...
 }:
 let
-  stateDir = "${toString config.externals.stateDir}/fetch-tree";
+  stateDir = "${toString config.externals.stateDir.evalPath}/fetch-tree";
 
   # Structured input type: tagged union of fetchTree input types.
   fetchTreeAttrsType = lib.types.attrTag {

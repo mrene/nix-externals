@@ -20,9 +20,21 @@ let
   };
 in
 {
-  # Direct registration: a writeShellApplication in externals.producers.<key> is preserved.
+  # Direct registration: a producer assigned to externals.producers.<key> is preserved.
   testCustomProducerRegistered = {
     expr = eval.config.externals.producers ? custom;
+    expected = true;
+  };
+
+  # Bare-path coercion: setting externals.stateDir to a path populates evalPath.
+  testStateDirCoercion = {
+    expr = builtins.isString (toString eval.config.externals.stateDir.evalPath);
+    expected = true;
+  };
+
+  # runtimePath defaults to a shell-quoted form of evalPath when unset.
+  testStateDirRuntimeDefault = {
+    expr = builtins.isString eval.config.externals.stateDir.runtimePath;
     expected = true;
   };
 

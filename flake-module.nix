@@ -18,10 +18,7 @@ in
         description = "Path relative to the flake root where state is materialized at runtime.";
       };
 
-      config.externals.pollPrelude = ''
-        FLAKE_ROOT="$(${lib.getExe config.flake-root.package})"
-        export STATE_DIR="$FLAKE_ROOT/${config.externals.relativeStateDir}"
-      '';
+      config.externals.stateDir.runtimePath = ''"$(${lib.getExe config.flake-root.package})/${config.externals.relativeStateDir}"'';
 
       config.packages.externals-poll = config.externals.poll;
     }

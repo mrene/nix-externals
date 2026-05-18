@@ -6,7 +6,7 @@
   ...
 }:
 let
-  stateDir = "${toString config.externals.stateDir}/exec";
+  stateDir = "${toString config.externals.stateDir.evalPath}/exec";
 
   mkSubmodule =
     { name, ... }:
