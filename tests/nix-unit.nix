@@ -1,6 +1,7 @@
 let
   pkgs = import <nixpkgs> { };
-  eval = pkgs.lib.evalModules {
+  lib = pkgs.lib;
+  eval = lib.evalModules {
     modules = [
       ../modules
       (
@@ -61,8 +62,8 @@ in
   };
 
   # Aggregator is a derivation.
-  testExternalsPollIsDerivation = {
-    expr = eval.config.externals.poll ? drvPath;
+  testExternalsRunIsDerivation = {
+    expr = eval.config.externals.run ? drvPath;
     expected = true;
   };
 
@@ -70,5 +71,24 @@ in
   testProducerRegistered = {
     expr = eval.config.externals ? ready-thing && eval.config.externals.ready-thing ? producer;
     expected = true;
+  };
+
+  # Aggregator skips ready entries: its script text references the pending
+  # producer's outPath but not the ready one's.
+  testRunFiltersReadyEntries = {
+    expr =
+      let
+        runText = builtins.unsafeDiscardStringContext eval.config.externals.run.text;
+        readyOut = builtins.unsafeDiscardStringContext eval.config.externals.ready-thing.producer.outPath;
+        pendingOut = builtins.unsafeDiscardStringContext eval.config.externals.pending-thing.producer.outPath;
+      in
+      {
+        excludesReady = !(lib.hasInfix readyOut runText);
+        includesPending = lib.hasInfix pendingOut runText;
+      };
+    expected = {
+      excludesReady = true;
+      includesPending = true;
+    };
   };
 }

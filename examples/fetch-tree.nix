@@ -222,7 +222,7 @@ let
         value = lib.mkOption {
           type = sourceTreeType;
           default = config.externals.${extKey}.value;
-          description = "The locked source tree, available once `nix run .#externals-poll` has run.";
+          description = "The locked source tree, available once `nix run .#externals-run` has run.";
         };
       };
     };

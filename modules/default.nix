@@ -19,7 +19,7 @@ let
           description = ''
             Shell expression evaluated at runtime to the writable state directory. The default
             uses `evalPath` verbatim, which is correct when consumers pass an absolute path or
-            run the poll script from within the live source tree. Integrations like flake-parts
+            run the aggregator from within the live source tree. Integrations like flake-parts
             override this to compute the live working-tree path at runtime (e.g. via `flake-root`).
           '';
         };
@@ -57,17 +57,16 @@ let
             if ready then
               import valueFile
             else
-              throw "external '${name}' not ready. Run 'nix run .#externals-poll' to materialize.";
+              throw "external '${name}' not ready. Run 'nix run .#externals-run' to materialize.";
           description = "Result of `import \"$STATE_DIR/${name}.nix\"`. Throws when not ready.";
         };
       };
     };
 
-  reservedKeys = [
-    "stateDir"
-    "poll"
-  ];
-  producers = lib.removeAttrs config.externals reservedKeys;
+  # Producers are freeform externals.<name> entries; typed sub-options (stateDir, run,
+  # and any added by wrappers like relativeStateDir) are excluded by shape.
+  producers = lib.filterAttrs (_: v: lib.isAttrs v && v ? producer) config.externals;
+  notReady = lib.filterAttrs (_: cfg: !cfg.ready) producers;
 in
 {
   options.externals = lib.mkOption {
@@ -93,24 +92,25 @@ in
             ```
           '';
         };
-        poll = lib.mkOption {
+        run = lib.mkOption {
           type = lib.types.package;
           readOnly = true;
-          description = "Aggregator that runs every registered producer.";
+          description = "Aggregator that runs producers for entries not yet ready.";
         };
       };
     };
   };
 
-  config.externals.poll = pkgs.writeShellApplication {
-    name = "externals-poll";
+  config.externals.run = pkgs.writeShellApplication {
+    name = "externals-run";
     text = ''
-      export STATE_DIR=${config.externals.stateDir.runtimePath}
+      STATE_DIR=${config.externals.stateDir.runtimePath}
+      export STATE_DIR
       mkdir -p "$STATE_DIR"
       ${lib.concatMapStringsSep "\n" (name: ''
         echo "Running: ${name}"
-        ${lib.getExe producers.${name}.producer}
-      '') (lib.attrNames producers)}
+        ${lib.getExe notReady.${name}.producer}
+      '') (lib.attrNames notReady)}
     '';
   };
 }

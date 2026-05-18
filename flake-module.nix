@@ -18,9 +18,11 @@ in
         description = "Path relative to the flake root where state is materialized at runtime.";
       };
 
-      config.externals.stateDir.runtimePath = ''"$(${lib.getExe config.flake-root.package})/${config.externals.relativeStateDir}"'';
+      config.externals.stateDir.runtimePath = /* bash */ ''
+        "$(${lib.getExe config.flake-root.package})/${config.externals.relativeStateDir}"
+      '';
 
-      config.packages.externals-poll = config.externals.poll;
+      config.packages.externals-run = config.externals.run;
     }
   );
 }
