@@ -1,4 +1,4 @@
-# Exec provider - executes derivations in state directory
+# exec provider - runs a derivation or shell snippet in a per-entry working directory
 {
   lib,
   config,
@@ -6,66 +6,69 @@
   ...
 }:
 let
-  futures = import ../../lib { inherit lib; };
-  stateDir = "${config.futures.stateDir}/exec";
-in
-{
-  options.futures.exec = lib.mkOption {
-    type = futures.mkProvider {
-      inputType = lib.types.either lib.types.str lib.types.package;
-      valueType = lib.types.path;
-      mkConfig =
-        { name }:
-        let
-          futureDir = stateDir + "/${name}";
-          markerFile = futureDir + "/.ready";
-          ready = builtins.pathExists markerFile;
-        in
-        {
-          inherit ready;
-          value =
+  stateDir = "${toString config.externals.stateDir}/exec";
+
+  mkSubmodule =
+    { name, ... }:
+    let
+      futureDir = stateDir + "/${name}";
+      markerFile = futureDir + "/.ready";
+      ready = builtins.pathExists markerFile;
+    in
+    {
+      options = {
+        input = lib.mkOption {
+          type = lib.types.either lib.types.str lib.types.package;
+          description = "Shell snippet or derivation to run. Working directory is per-entry.";
+        };
+        ready = lib.mkOption {
+          type = lib.types.bool;
+          default = ready;
+        };
+        value = lib.mkOption {
+          type = lib.types.path;
+          default =
             if ready then
               futureDir
             else
-              throw "Future '${name}' not ready. Run 'nix run .#futures-poll' to execute.";
+              throw "exec '${name}' not ready. Run 'nix run .#externals-poll' to execute.";
         };
+      };
     };
+
+  notReady = lib.filterAttrs (_: cfg: !cfg.ready) config.exec;
+in
+{
+  options.exec = lib.mkOption {
+    type = lib.types.attrsOf (lib.types.submodule mkSubmodule);
     default = { };
+    description = "Externals materialized by running a shell snippet or derivation.";
   };
 
-  config.futures.exec.poll =
+  config.externals.producers = lib.mapAttrs' (
+    name: cfg:
     let
-      allFutures = lib.filterAttrs (n: _: n != "poll") config.futures.exec;
-      notReady = lib.filterAttrs (_: cfg: !cfg.ready) allFutures;
-      notReadyNames = lib.attrNames notReady;
-    in
-    pkgs.writeShellScriptBin "poll-exec" ''
-      set -e
-      echo "Exec provider:"
-      ${
-        if notReadyNames == [ ] then
-          ''echo "  All ready"''
+      executable =
+        if builtins.isString cfg.input then
+          pkgs.writeShellScriptBin "exec-${name}" cfg.input
         else
-          lib.concatMapStringsSep "\n" (
-            name:
-            let
-              input = allFutures.${name}.input;
-              executable =
-                if builtins.isString input then pkgs.writeShellScriptBin "exec-${name}" input else input;
-              futureDir = "$STATE_DIR/exec/${name}";
-            in
-            ''
-              echo -n "  ${name}: "
-              mkdir -p ${futureDir}
-              cd ${futureDir}
-              if ${lib.getExe executable}; then
-                touch ${futureDir}/.ready
-                echo "done"
-              else
-                echo "failed"
-              fi
-            ''
-          ) notReadyNames
+          cfg.input;
+      futureDir = ''"$STATE_DIR/exec/${name}"'';
+    in
+    lib.nameValuePair "exec-${name}" (
+      pkgs.writeShellApplication {
+        name = "exec-${name}";
+        text = ''
+          mkdir -p ${futureDir}
+          cd ${futureDir}
+          if ${lib.getExe executable}; then
+            touch ${futureDir}/.ready
+          else
+            echo "exec '${name}': failed" >&2
+            exit 1
+          fi
+        '';
       }
-    '';
+    )
+  ) notReady;
 }

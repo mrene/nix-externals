@@ -3,50 +3,62 @@ let
   eval = pkgs.lib.evalModules {
     modules = [
       ../modules
-      {
-        futures.stateDir = ./fixtures/_futures;
-        futures.external.ready-future.input = { };
-        futures.external.pending-future.input = { };
-      }
+      (
+        { pkgs, ... }:
+        {
+          externals.stateDir = ./fixtures/_externals;
+          externals.producers.custom = pkgs.writeShellApplication {
+            name = "custom";
+            text = "echo custom";
+          };
+          exec.ready-future.input = "true";
+          exec.pending-future.input = "true";
+        }
+      )
     ];
     specialArgs = { inherit pkgs; };
   };
 in
 {
-  # External provider - ready state
-  testExternalReadyIsTrue = {
-    expr = eval.config.futures.external.ready-future.ready;
+  # Direct registration: a writeShellApplication in externals.producers.<key> is preserved.
+  testCustomProducerRegistered = {
+    expr = eval.config.externals.producers ? custom;
     expected = true;
   };
 
-  testExternalReadyValue = {
-    expr = eval.config.futures.external.ready-future.value;
-    expected = {
-      message = "hello";
-      count = 42;
-    };
+  # exec provider - ready state (marker file exists)
+  testExecReadyIsTrue = {
+    expr = eval.config.exec.ready-future.ready;
+    expected = true;
   };
 
-  # External provider - not ready state
-  testExternalPendingIsFalse = {
-    expr = eval.config.futures.external.pending-future.ready;
+  testExecReadyValueIsPath = {
+    expr = builtins.isString (toString eval.config.exec.ready-future.value);
+    expected = true;
+  };
+
+  # exec provider - not ready
+  testExecPendingIsFalse = {
+    expr = eval.config.exec.pending-future.ready;
     expected = false;
   };
 
-  testExternalPendingValueThrows = {
-    expr = !(builtins.tryEval eval.config.futures.external.pending-future.value).success;
+  testExecPendingValueThrows = {
+    expr = !(builtins.tryEval eval.config.exec.pending-future.value).success;
     expected = true;
   };
 
-  # Provider poll is a derivation
-  testExternalPollIsDerivation = {
-    expr = eval.config.futures.external.poll ? drvPath;
+  # Aggregator is a derivation
+  testExternalsPollIsDerivation = {
+    expr = eval.config.externals.poll ? drvPath;
     expected = true;
   };
 
-  # Top-level poll aggregates providers
-  testFuturesPollIsDerivation = {
-    expr = eval.config.futures.poll ? drvPath;
+  # Provider only emits producer entries for not-ready exec entries.
+  testProducerEmittedForPendingOnly = {
+    expr =
+      (eval.config.externals.producers ? "exec-pending-future")
+      && !(eval.config.externals.producers ? "exec-ready-future");
     expected = true;
   };
 }

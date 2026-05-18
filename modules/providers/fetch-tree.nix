@@ -1,5 +1,4 @@
-# Fetch-tree provider - resolves fetchTree hashes via impure evaluation
-# Delegates to exec provider for actual execution
+# fetch-tree provider - resolves fetchTree inputs to locked source trees
 {
   lib,
   config,
@@ -7,9 +6,9 @@
   ...
 }:
 let
-  futures = import ../../lib { inherit lib; };
+  stateDir = "${toString config.externals.stateDir}/fetch-tree";
 
-  # Structured input type: tagged union of fetchTree input types
+  # Structured input type: tagged union of fetchTree input types.
   fetchTreeAttrsType = lib.types.attrTag {
     github = lib.mkOption {
       type = lib.types.submodule {
@@ -155,43 +154,33 @@ let
     };
     tarball = lib.mkOption {
       type = lib.types.submodule {
-        options = {
-          url = lib.mkOption {
-            type = lib.types.str;
-            description = "Tarball URL";
-          };
+        options.url = lib.mkOption {
+          type = lib.types.str;
+          description = "Tarball URL";
         };
       };
     };
     file = lib.mkOption {
       type = lib.types.submodule {
-        options = {
-          url = lib.mkOption {
-            type = lib.types.str;
-            description = "File URL";
-          };
+        options.url = lib.mkOption {
+          type = lib.types.str;
+          description = "File URL";
         };
       };
     };
     path = lib.mkOption {
       type = lib.types.submodule {
-        options = {
-          path = lib.mkOption {
-            type = lib.types.path;
-            description = "Local filesystem path";
-          };
+        options.path = lib.mkOption {
+          type = lib.types.path;
+          description = "Local filesystem path";
         };
       };
     };
   };
 
-  # Combined input type: either a flake URL string or structured attrs
-  # Examples:
-  #   input = "github:NixOS/nixpkgs/ae2e6b3958682513d28f7d633734571fb18285dd"
-  #   input.github = { owner = "NixOS"; repo = "nixpkgs"; }
+  # Either a flake URL string or structured attrs.
   fetchTreeInputType = lib.types.either lib.types.str fetchTreeAttrsType;
 
-  # Output type: Nix source tree (has outPath and can be used as a path)
   sourceTreeType = lib.mkOptionType {
     name = "sourceTree";
     description = "Nix source tree (result of builtins.fetchTree)";
@@ -199,10 +188,7 @@ let
     merge = lib.mergeEqualOption;
   };
 
-  # All fetch-tree futures (excluding poll)
-  fetchTreeFutures = lib.filterAttrs (n: _: n != "poll") config.futures.fetch-tree;
-
-  # Convert input to fetchTree attrs format
+  # Convert input to fetchTree attrs format.
   # String: "github:owner/repo" -> { type = "github"; owner; repo; }
   # AttrTag: { github = { owner, repo, ... }; } -> { type = "github"; owner; repo; ... }
   toFetchTreeInput =
@@ -211,70 +197,80 @@ let
       builtins.parseFlakeRef input
     else
       let
-        # attrTag sets exactly one attribute
         typeName = lib.head (lib.attrNames input);
         attrs = input.${typeName};
-        # Filter out empty string defaults (not booleans/other types) and internal attrs
         cleanAttrs = lib.filterAttrs (n: v: !(lib.isString v && v == "") && n != "_module") attrs;
       in
       cleanAttrs // { type = typeName; };
 
-  # Create a fetch script for a given fetchTree input
-  mkFetchScript =
-    name: input:
+  mkSubmodule =
+    { name, config, ... }:
     let
-      inputFile = pkgs.writeText "fetch-${name}-input.json" (builtins.toJSON (toFetchTreeInput input));
+      resultFile = stateDir + "/${name}/result.json";
+      ready = builtins.pathExists resultFile;
     in
-    pkgs.writeShellScriptBin "fetch-${name}" ''
-      set -e
-      nix-instantiate --eval --strict --json --expr "
-        let tree = builtins.fetchTree (builtins.fromJSON (builtins.readFile ${inputFile}));
-        in builtins.removeAttrs tree [\"outPath\"]
-      " > result.json
-    '';
-in
-{
-  options.futures.fetch-tree = lib.mkOption {
-    type = futures.mkProvider {
-      inputType = fetchTreeInputType;
-      valueType = sourceTreeType;
-      mkConfig =
-        { name }:
-        let
-          execFuture = config.futures.exec."fetch-tree/${name}";
-          input = toFetchTreeInput config.futures.fetch-tree.${name}.input;
-        in
-        {
-          ready = execFuture.ready;
-          value =
-            if execFuture.ready then
+    {
+      options = {
+        input = lib.mkOption {
+          type = fetchTreeInputType;
+          description = "Flake URL string or structured fetchTree reference.";
+        };
+        ready = lib.mkOption {
+          type = lib.types.bool;
+          default = ready;
+        };
+        value = lib.mkOption {
+          type = sourceTreeType;
+          default =
+            if ready then
               let
-                locked = builtins.fromJSON (builtins.readFile (execFuture.value + "/result.json"));
-                # Only keep attrs needed for reproducible fetching
-                lockedInput = lib.filterAttrs (
+                locked = builtins.fromJSON (builtins.readFile resultFile);
+                lockedAttrs = lib.filterAttrs (
                   n: _:
                   builtins.elem n [
                     "narHash"
                     "rev"
                   ]
                 ) locked;
+                input = toFetchTreeInput config.input;
               in
-              builtins.fetchTree (input // lockedInput)
+              builtins.fetchTree (input // lockedAttrs)
             else
-              throw "Future '${name}' not ready. Run 'nix run .#futures-poll' to fetch.";
+              throw "fetch-tree '${name}' not ready. Run 'nix run .#externals-poll' to fetch.";
         };
+      };
     };
+
+  notReady = lib.filterAttrs (_: cfg: !cfg.ready) config.fetch-tree;
+in
+{
+  options.fetch-tree = lib.mkOption {
+    type = lib.types.attrsOf (lib.types.submodule mkSubmodule);
     default = { };
+    description = "Externals resolved through builtins.fetchTree, producing locked source trees.";
   };
 
-  # Delegate to exec provider - create exec futures for each fetch-tree future
-  config.futures.exec = lib.mapAttrs' (
-    name: cfg: lib.nameValuePair "fetch-tree/${name}" { input = [ (mkFetchScript name cfg.input) ]; }
-  ) fetchTreeFutures;
-
-  # fetch-tree's poll is a no-op since exec handles it
-  config.futures.fetch-tree.poll = pkgs.writeShellScriptBin "poll-fetch-tree" ''
-    echo "Fetch-tree provider:"
-    echo "  (delegated to exec)"
-  '';
+  config.externals.producers = lib.mapAttrs' (
+    name: cfg:
+    let
+      inputFile = pkgs.writeText "fetch-tree-${name}-input.json" (
+        builtins.toJSON (toFetchTreeInput cfg.input)
+      );
+      futureDir = ''"$STATE_DIR/fetch-tree/${name}"'';
+    in
+    lib.nameValuePair "fetch-tree-${name}" (
+      pkgs.writeShellApplication {
+        name = "fetch-tree-${name}";
+        runtimeInputs = [ pkgs.nix ];
+        text = ''
+          mkdir -p ${futureDir}
+          cd ${futureDir}
+          nix-instantiate --eval --strict --json --expr "
+            let tree = builtins.fetchTree (builtins.fromJSON (builtins.readFile ${inputFile}));
+            in builtins.removeAttrs tree [\"outPath\"]
+          " > result.json
+        '';
+      }
+    )
+  ) notReady;
 }

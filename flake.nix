@@ -1,5 +1,5 @@
 {
-  description = "nix-futures - declare values that need external resolution";
+  description = "nix-externals - declare values that need external resolution";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";

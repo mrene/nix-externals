@@ -51,7 +51,7 @@
         "type": "github"
       }
     },
-    "nix-futures": {
+    "nix-externals": {
       "inputs": {
         "flake-parts": "flake-parts_2",
         "flake-root": "flake-root",
@@ -132,7 +132,7 @@
     "root": {
       "inputs": {
         "flake-parts": "flake-parts",
-        "nix-futures": "nix-futures",
+        "nix-externals": "nix-externals",
         "nixpkgs": "nixpkgs_2"
       }
     }

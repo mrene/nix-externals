@@ -1,4 +1,4 @@
-# flake-parts module for nix-futures
+# flake-parts module for nix-externals
 { flake-root }:
 { flake-parts-lib, ... }:
 let
@@ -12,19 +12,18 @@ in
     {
       imports = [ ./modules ];
 
-      options.futures.relativeStateDir = lib.mkOption {
+      options.externals.relativeStateDir = lib.mkOption {
         type = lib.types.str;
-        default = "_futures";
-        description = "Relative path from flake root to state directory (used in poll scripts at runtime)";
+        default = "_externals";
+        description = "Path relative to the flake root where state is materialized at runtime.";
       };
 
-      config.futures.pollPrelude = ''
+      config.externals.pollPrelude = ''
         FLAKE_ROOT="$(${lib.getExe config.flake-root.package})"
-        STATE_DIR="$FLAKE_ROOT/${config.futures.relativeStateDir}"
-        export FLAKE_ROOT STATE_DIR
+        export STATE_DIR="$FLAKE_ROOT/${config.externals.relativeStateDir}"
       '';
 
-      config.packages.futures-poll = config.futures.poll;
+      config.packages.externals-poll = config.externals.poll;
     }
   );
 }
