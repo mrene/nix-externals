@@ -147,6 +147,7 @@ in
 
 ## Related
 
+- [clan vars](https://clan.lol/docs/25.11/guides/vars/vars-overview) — same general shape: vars are declared inside NixOS modules and materialized by `clan vars generate`. Clan is scoped to NixOS fleet management with first-class secret handling (sops, password-store); nix-futures is the underlying primitive.
 - [npins](https://github.com/andir/npins) — pin manager with its own CLI; nix-futures' `npins` provider rides on top of it. The motivating difference is co-located declarations.
 - [niv](https://github.com/nmattia/niv) — same shape as npins, predates it. Same separation-of-declaration tradeoff.
 - Flake `inputs` — deterministic and well-understood, but fixed to the flake URL grammar and tied to `flake.lock`. nix-futures is intentionally not a flake-input mechanism.
