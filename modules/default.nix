@@ -28,24 +28,57 @@ let
   );
 
   stateDirType = lib.types.coercedTo lib.types.path (p: { evalPath = p; }) stateDirSubmodule;
+
+  externalEntry =
+    { name, ... }:
+    let
+      valueFile = "${toString config.externals.stateDir.evalPath}/${name}.nix";
+      ready = builtins.pathExists valueFile;
+    in
+    {
+      options = {
+        producer = lib.mkOption {
+          type = lib.types.package;
+          description = ''
+            Script that materializes this external. Must write a Nix expression to
+            `$STATE_DIR/${name}.nix` on success. Expected to be idempotent — running it again
+            when the file already exists should be a no-op.
+          '';
+        };
+        ready = lib.mkOption {
+          type = lib.types.bool;
+          default = ready;
+          readOnly = true;
+          description = "True iff `$STATE_DIR/${name}.nix` exists at evaluation time.";
+        };
+        value = lib.mkOption {
+          type = lib.types.anything;
+          default =
+            if ready then
+              import valueFile
+            else
+              throw "external '${name}' not ready. Run 'nix run .#externals-poll' to materialize.";
+          description = "Result of `import \"$STATE_DIR/${name}.nix\"`. Throws when not ready.";
+        };
+      };
+    };
+
+  reservedKeys = [
+    "stateDir"
+    "poll"
+  ];
+  producers = lib.removeAttrs config.externals reservedKeys;
 in
 {
-  imports = [
-    ./providers/exec.nix
-    ./providers/fetch-tree.nix
-    ./providers/npins.nix
-  ];
-
   options.externals = lib.mkOption {
     description = ''
-      Configuration and registry for externally-resolved values.
-
-      Provider modules add producer scripts under `externals.producers.<key>`. The aggregator
-      at `externals.poll` runs every entry. Each script is expected to be idempotent and to
-      write its result under `$STATE_DIR` at runtime.
+      Registry of externally-resolved values. Each `externals.<name>` declares a `producer` script
+      that writes `$STATE_DIR/<name>.nix`; the framework reads that file back as `value` and
+      reports `ready` based on its presence.
     '';
     default = { };
     type = lib.types.submodule {
+      freeformType = lib.types.attrsOf (lib.types.submodule externalEntry);
       options = {
         stateDir = lib.mkOption {
           type = stateDirType;
@@ -60,18 +93,10 @@ in
             ```
           '';
         };
-        producers = lib.mkOption {
-          type = lib.types.attrsOf lib.types.package;
-          default = { };
-          description = ''
-            Registry of producer scripts. Each key maps to a derivation whose executable is
-            invoked by the poll aggregator.
-          '';
-        };
         poll = lib.mkOption {
           type = lib.types.package;
           readOnly = true;
-          description = "Aggregator script that runs every producer in `externals.producers`.";
+          description = "Aggregator that runs every registered producer.";
         };
       };
     };
@@ -84,8 +109,8 @@ in
       mkdir -p "$STATE_DIR"
       ${lib.concatMapStringsSep "\n" (name: ''
         echo "Running: ${name}"
-        ${lib.getExe config.externals.producers.${name}}
-      '') (lib.attrNames config.externals.producers)}
+        ${lib.getExe producers.${name}.producer}
+      '') (lib.attrNames producers)}
     '';
   };
 }

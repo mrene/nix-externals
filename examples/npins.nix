@@ -1,4 +1,8 @@
-# npins provider - syncs declared pins with an existing npins directory
+# npins example - syncs declared pins with an existing npins directory.
+#
+# State lives in `npins/sources.json` (npins CLI's own format), not under $STATE_DIR.
+# `ready`/`value` are computed off `npinsSources ? <name>` directly; this example bypasses
+# the framework's $STATE_DIR/<name>.nix convention and only registers producers.
 {
   lib,
   config,
@@ -15,7 +19,6 @@ let
       inherit options;
     };
 
-  # Input type: tagged union matching npins add subcommands.
   npinsInputType = lib.types.attrTag {
     github = lib.mkOption {
       type = mkInputSubmodule {
@@ -94,8 +97,6 @@ let
     merge = lib.mergeEqualOption;
   };
 
-  # Positional args per type - everything else becomes a flag automatically.
-  # To add a new type, add an entry here and to npinsInputType above.
   positionalArgs = {
     github = [
       "owner"
@@ -142,6 +143,7 @@ let
         ready = lib.mkOption {
           type = lib.types.bool;
           default = ready;
+          readOnly = true;
         };
         value = lib.mkOption {
           type = npinsSourceType;
@@ -161,7 +163,6 @@ let
       "package"
     ])
   ) config.npins;
-  notReady = lib.filterAttrs (_: cfg: !cfg.ready) pins;
 in
 {
   options.npins = lib.mkOption {
@@ -183,19 +184,24 @@ in
     description = "Pins declared inline; the npins CLI is invoked to materialize missing entries.";
   };
 
-  config.externals.producers = lib.mapAttrs' (
+  config.externals = lib.mapAttrs' (
     name: cfg:
     let
       addCmd = mkAddCommand cfg.input;
       npinsDir = toString config.npins.dir;
     in
-    lib.nameValuePair "npins-${name}" (
-      pkgs.writeShellApplication {
+    lib.nameValuePair "npins-${name}" {
+      producer = pkgs.writeShellApplication {
         name = "npins-${name}";
+        runtimeInputs = [ pkgs.jq ];
         text = ''
-          ${lib.getExe config.npins.package} add ${addCmd} --name ${name} -d ${npinsDir}
+          if [ -f ${lib.escapeShellArg npinsDir}/sources.json ] \
+            && jq -e '.pins | has("${name}")' ${lib.escapeShellArg npinsDir}/sources.json > /dev/null; then
+            exit 0
+          fi
+          ${lib.getExe config.npins.package} add ${addCmd} --name ${name} -d ${lib.escapeShellArg npinsDir}
         '';
-      }
-    )
-  ) notReady;
+      };
+    }
+  ) pins;
 }

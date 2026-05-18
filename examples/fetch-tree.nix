@@ -1,4 +1,9 @@
-# fetch-tree provider - resolves fetchTree inputs to locked source trees
+# fetch-tree example - resolves fetchTree inputs to locked source trees.
+#
+# Producer writes a self-contained Nix expression to $STATE_DIR/fetch-tree-<name>.nix
+# of the form `builtins.fetchTree (builtins.fromJSON ''<locked-json>'')`. Framework reads
+# it back as `externals.fetch-tree-<name>.value`; this module also exposes a thin proxy
+# at `fetch-tree.<name>.value` for callers that prefer the per-provider namespace.
 {
   lib,
   config,
@@ -6,9 +11,6 @@
   ...
 }:
 let
-  stateDir = "${toString config.externals.stateDir.evalPath}/fetch-tree";
-
-  # Structured input type: tagged union of fetchTree input types.
   fetchTreeAttrsType = lib.types.attrTag {
     github = lib.mkOption {
       type = lib.types.submodule {
@@ -178,7 +180,6 @@ let
     };
   };
 
-  # Either a flake URL string or structured attrs.
   fetchTreeInputType = lib.types.either lib.types.str fetchTreeAttrsType;
 
   sourceTreeType = lib.mkOptionType {
@@ -188,9 +189,7 @@ let
     merge = lib.mergeEqualOption;
   };
 
-  # Convert input to fetchTree attrs format.
-  # String: "github:owner/repo" -> { type = "github"; owner; repo; }
-  # AttrTag: { github = { owner, repo, ... }; } -> { type = "github"; owner; repo; ... }
+  # String → fetchTree attrs via parseFlakeRef; attrTag → tagged-name plus its fields.
   toFetchTreeInput =
     input:
     if lib.isString input then
@@ -204,10 +203,9 @@ let
       cleanAttrs // { type = typeName; };
 
   mkSubmodule =
-    { name, config, ... }:
+    { name, ... }:
     let
-      resultFile = stateDir + "/${name}/result.json";
-      ready = builtins.pathExists resultFile;
+      extKey = "fetch-tree-${name}";
     in
     {
       options = {
@@ -217,31 +215,17 @@ let
         };
         ready = lib.mkOption {
           type = lib.types.bool;
-          default = ready;
+          default = config.externals.${extKey}.ready;
+          readOnly = true;
+          description = "True iff the locked tree has been materialized.";
         };
         value = lib.mkOption {
           type = sourceTreeType;
-          default =
-            if ready then
-              let
-                locked = builtins.fromJSON (builtins.readFile resultFile);
-                lockedAttrs = lib.filterAttrs (
-                  n: _:
-                  builtins.elem n [
-                    "narHash"
-                    "rev"
-                  ]
-                ) locked;
-                input = toFetchTreeInput config.input;
-              in
-              builtins.fetchTree (input // lockedAttrs)
-            else
-              throw "fetch-tree '${name}' not ready. Run 'nix run .#externals-poll' to fetch.";
+          default = config.externals.${extKey}.value;
+          description = "The locked source tree, available once `nix run .#externals-poll` has run.";
         };
       };
     };
-
-  notReady = lib.filterAttrs (_: cfg: !cfg.ready) config.fetch-tree;
 in
 {
   options.fetch-tree = lib.mkOption {
@@ -250,27 +234,35 @@ in
     description = "Externals resolved through builtins.fetchTree, producing locked source trees.";
   };
 
-  config.externals.producers = lib.mapAttrs' (
+  config.externals = lib.mapAttrs' (
     name: cfg:
     let
       inputFile = pkgs.writeText "fetch-tree-${name}-input.json" (
         builtins.toJSON (toFetchTreeInput cfg.input)
       );
-      futureDir = ''"$STATE_DIR/fetch-tree/${name}"'';
     in
-    lib.nameValuePair "fetch-tree-${name}" (
-      pkgs.writeShellApplication {
+    lib.nameValuePair "fetch-tree-${name}" {
+      producer = pkgs.writeShellApplication {
         name = "fetch-tree-${name}";
         runtimeInputs = [ pkgs.nix ];
         text = ''
-          mkdir -p ${futureDir}
-          cd ${futureDir}
-          nix-instantiate --eval --strict --json --expr "
-            let tree = builtins.fetchTree (builtins.fromJSON (builtins.readFile ${inputFile}));
-            in builtins.removeAttrs tree [\"outPath\"]
-          " > result.json
+          out="$STATE_DIR/fetch-tree-${name}.nix"
+          if [ -e "$out" ]; then exit 0; fi
+          locked=$(nix-instantiate --eval --strict --json --expr "
+            let
+              input = builtins.fromJSON (builtins.readFile ${inputFile});
+              tree = builtins.fetchTree input;
+              locked = { narHash = tree.narHash; }
+                // (if tree ? rev then { rev = tree.rev; } else { });
+            in input // locked
+          ")
+          cat > "$out" <<NIX_EOF
+          builtins.fetchTree (builtins.fromJSON '''
+          $locked
+          ''')
+          NIX_EOF
         '';
-      }
-    )
-  ) notReady;
+      };
+    }
+  ) config.fetch-tree;
 }

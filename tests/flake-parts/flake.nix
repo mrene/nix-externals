@@ -24,12 +24,20 @@
         perSystem =
           { pkgs, config, ... }:
           {
+            imports = [ "${inputs.nix-externals}/examples/fetch-tree.nix" ];
+
             externals.stateDir = ./_externals;
 
-            exec.test-gen.input = pkgs.writeShellScriptBin "generate" ''
-              echo "generating config..."
-              echo '{ message = "hello from exec"; }' > config.nix
-            '';
+            externals.test-gen.producer = pkgs.writeShellApplication {
+              name = "test-gen";
+              text = ''
+                out="$STATE_DIR/test-gen.nix"
+                if [ -e "$out" ]; then exit 0; fi
+                echo '{ message = "hello from a bare external"; }' > "$out"
+              '';
+            };
+
+            packages.greeting = pkgs.writeText "greeting.txt" config.externals.test-gen.value.message;
 
             fetch-tree.flake-root.input.github = {
               owner = "srid";

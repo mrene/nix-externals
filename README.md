@@ -4,9 +4,7 @@ Declare values that need external resolution next to the code that uses them.
 
 A lot of work in Nix happens out of band. Dependency pins live in a separate `npins/` or `niv/` directory. Fixed-output derivation hashes get pasted in after a build fails. `gomod2nix.toml` and its .NET cousin have to be regenerated whenever inputs change. `nix2container` wants a fetched image manifest sitting next to your package. The recurring shape is the same: some value needs to be resolved by an external program, written somewhere, and then read back during evaluation — and the declaration of *what* to resolve typically lives far away from the code that consumes the result.
 
-nix-externals is an evalModules module that gives this pattern a uniform shape. A *provider* (`exec`, `fetch-tree`, `npins`) exposes a typed `<provider>.<name>.{input, ready, value}` option triple. Reading `.value` when `ready` is false aborts evaluation with a message pointing at the poll command. A single aggregator script (`externals-poll`) walks every declared entry across every provider and writes the resolved state to disk. The next evaluation picks it up.
-
-Each provider is an ordinary NixOS module that emits its producer scripts into a shared registry (`externals.producers.<key>`). There's no framework indirection: a provider author writes a regular module that computes `ready`/`value` however it likes and registers a `writeShellApplication` for the materialization step.
+nix-externals is an evalModules module that gives this pattern a uniform shape. Each external is identified by a name; its `producer` is a script that writes `$STATE_DIR/<name>.nix`; the framework reports `ready` based on file presence and exposes `value = import "$STATE_DIR/<name>.nix"`. A single aggregator (`externals-poll`) walks every declared entry and runs each producer. The next evaluation picks up the materialized state.
 
 This is an experiment. The implementation aims for the minimum needed to be useful; expect rough edges.
 
@@ -46,6 +44,8 @@ lib.evalModules {
     imports = [ inputs.nix-externals.flakeModule ];
 
     perSystem = { pkgs, config, ... }: {
+      imports = [ "${inputs.nix-externals}/examples/fetch-tree.nix" ];
+
       externals.stateDir = ./_externals;
 
       fetch-tree.dotfiles.input = "github:mrene/dotfiles";
@@ -58,44 +58,45 @@ lib.evalModules {
 }
 ```
 
-The first evaluation throws: `fetch-tree 'dotfiles' not ready. Run 'nix run .#externals-poll' to fetch.` Run it; the locked tree lands under `_externals/fetch-tree/dotfiles/result.json`; evaluation succeeds; subsequent builds reuse the lock.
+The first evaluation throws: `external 'fetch-tree-dotfiles' not ready. Run 'nix run .#externals-poll' to materialize.` Run it; `_externals/fetch-tree-dotfiles.nix` lands with the locked tree; evaluation succeeds; subsequent builds reuse the lock.
 
 ## How it works
 
-Each provider exposes its own `<provider>.<name>.{input, ready, value}` option triple. Reading `.value` when `ready` is false throws; `ready` is cheap and independent of `.value`, so you can branch with `lib.mkIf <provider>.<name>.ready` to keep evaluation valid while resolution is pending.
+Each external is a freeform entry under `externals.<name>` with three sub-options:
 
-For each entry that isn't yet ready, the provider registers a `writeShellApplication` under `externals.producers."<provider>-<name>"`. The `externals-poll` aggregator (exposed as `packages.externals-poll` under flake-parts) runs every registered producer in turn. Each producer is expected to be idempotent and to write its result under `$STATE_DIR` at runtime.
+* `producer` — a `writeShellApplication` (or any package with a `mainProgram`) that, when run, writes `$STATE_DIR/<name>.nix`. Must be idempotent.
+* `ready` — `builtins.pathExists "$STATE_DIR/<name>.nix"`. Cheap; safe to branch on with `lib.mkIf`.
+* `value` — `import "$STATE_DIR/<name>.nix"` once ready; throws otherwise.
 
-## Built-in providers
+The aggregator at `externals.poll` (exposed as `packages.externals-poll` under flake-parts) runs every producer in turn. Each script is expected to no-op when its `<name>.nix` already exists.
 
-### exec
+## Examples
 
-Runs a shell snippet or derivation in a per-entry working directory under `$STATE_DIR/exec/<name>/`. Whatever the script writes there becomes `.value` — a path. A `.ready` marker is touched on success.
+Two reference implementations live under `examples/`. They are *not* imported by default — pull them in explicitly when you want them.
 
-```nix
-exec.codegen.input = ''
-  echo '{ message = "hello"; }' > config.nix
-'';
-# import "${config.exec.codegen.value}/config.nix"
-```
+### fetch-tree (`examples/fetch-tree.nix`)
 
-### fetch-tree
-
-Resolves a flake-style URL or a structured `attrTag` into a locked source tree via `builtins.fetchTree`. The lock (narHash, rev) is written once and reused on later evaluations.
+Resolves a flake-style URL or a structured `attrTag` into a locked source tree via `builtins.fetchTree`. The locked attributes (`narHash`, `rev`) are baked into the emitted `fetch-tree-<name>.nix` so subsequent evaluations call `fetchTree` with the lock applied.
 
 ```nix
+imports = [ "${inputs.nix-externals}/examples/fetch-tree.nix" ];
+
 fetch-tree.nixpkgs.input = "github:NixOS/nixpkgs/nixos-unstable";
 fetch-tree.flake-root.input.github = {
   owner = "srid";
   repo = "flake-root";
 };
+
+# config.fetch-tree.nixpkgs.value is a source tree (has outPath)
 ```
 
-### npins
+### npins (`examples/npins.nix`)
 
-Declare pins inline; the poller calls `npins add` for any entry missing from the existing `npins/` directory. The `npins` CLI stays the source of truth for updates — this provider only fills in declared-but-missing pins.
+Declare pins inline; the poller calls `npins add` for any entry missing from the existing `npins/` directory. The `npins` CLI stays the source of truth for updates — this example only fills in declared-but-missing pins. State lives in `npins/sources.json` (npins's own format), not under `$STATE_DIR`, so `ready`/`value` are computed off `npinsSources ? <name>` rather than the framework's file-presence convention.
 
 ```nix
+imports = [ "${inputs.nix-externals}/examples/npins.nix" ];
+
 npins.dir = ./npins;
 npins.nixpkgs.input.github = {
   owner = "NixOS";
@@ -104,75 +105,44 @@ npins.nixpkgs.input.github = {
 };
 ```
 
-### Rolling your own
+## Rolling your own
 
-If none of the built-ins fit, register a producer script directly:
+If none of the examples fit, register a producer directly. The framework gives you `ready` and `value` for free:
 
 ```nix
-externals.producers.my-thing = pkgs.writeShellApplication {
-  name = "my-thing";
+externals.codegen.producer = pkgs.writeShellApplication {
+  name = "codegen";
   text = ''
-    if [ -e "$STATE_DIR/my-thing/.ready" ]; then exit 0; fi
-    mkdir -p "$STATE_DIR/my-thing"
-    # ... do the work, write into $STATE_DIR/my-thing/, then:
-    touch "$STATE_DIR/my-thing/.ready"
+    out="$STATE_DIR/codegen.nix"
+    if [ -e "$out" ]; then exit 0; fi
+    # ... compute something ...
+    echo '{ message = "hello"; }' > "$out"
   '';
 };
 
 # At your use site:
-myValue = if builtins.pathExists "${toString config.externals.stateDir.evalPath}/my-thing/.ready"
-  then import "${toString config.externals.stateDir.evalPath}/my-thing/result.nix"
-  else throw "my-thing not ready, run 'nix run .#externals-poll'";
+myValue = config.externals.codegen.value;   # { message = "hello"; }
 ```
 
-## Writing a provider
-
-A provider is an ordinary NixOS module. Define an option tree for typed declarations, compute `ready`/`value` from on-disk state, and emit a `writeShellApplication` per unresolved entry into `externals.producers.<key>`:
+For sidecar files (extracted archives, fetched keys), have the producer write its scratch state wherever it likes — only the `$STATE_DIR/<name>.nix` file is load-bearing for the framework. A common pattern is a sibling directory:
 
 ```nix
-{ lib, config, pkgs, ... }:
-let
-  stateDir = "${toString config.externals.stateDir.evalPath}/hostkey";
-
-  mkSubmodule = { name, ... }: let
-    file = stateDir + "/${name}";
-    ready = builtins.pathExists file;
-  in {
-    options = {
-      input = lib.mkOption { type = lib.types.str; };
-      ready = lib.mkOption { type = lib.types.bool; default = ready; };
-      value = lib.mkOption {
-        type = lib.types.str;
-        default = if ready then builtins.readFile file
-                  else throw "hostkey '${name}' not ready";
-      };
-    };
-  };
-
-  notReady = lib.filterAttrs (_: cfg: !cfg.ready) config.hostkey;
-in {
-  options.hostkey = lib.mkOption {
-    type = lib.types.attrsOf (lib.types.submodule mkSubmodule);
-    default = { };
-  };
-
-  config.externals.producers = lib.mapAttrs' (name: cfg:
-    lib.nameValuePair "hostkey-${name}" (pkgs.writeShellApplication {
-      name = "hostkey-${name}";
-      text = ''
-        ssh-keyscan ${cfg.input} > "$STATE_DIR/hostkey/${name}"
-      '';
-    })
-  ) notReady;
-}
+externals.assets.producer = pkgs.writeShellApplication {
+  name = "assets";
+  text = ''
+    out="$STATE_DIR/assets.nix"
+    if [ -e "$out" ]; then exit 0; fi
+    mkdir -p "$STATE_DIR/assets.d"
+    curl ... | tar xz -C "$STATE_DIR/assets.d"
+    echo "./assets.d" > "$out"     # path resolves relative to assets.nix
+  '';
+};
 ```
-
-The three shipped providers (`exec`, `fetch-tree`, `npins`) are working references of varying complexity.
 
 ## Related
 
 - [clan vars](https://clan.lol/docs/25.11/guides/vars/vars-overview) — same general shape: vars are declared inside NixOS modules and materialized by `clan vars generate`. Clan is scoped to NixOS fleet management with first-class secret handling (sops, password-store); nix-externals is the underlying primitive.
-- [npins](https://github.com/andir/npins) — pin manager with its own CLI; nix-externals' `npins` provider rides on top of it. The motivating difference is co-located declarations.
+- [npins](https://github.com/andir/npins) — pin manager with its own CLI; the example provider rides on top of it. The motivating difference is co-located declarations.
 - [niv](https://github.com/nmattia/niv) — same shape as npins, predates it. Same separation-of-declaration tradeoff.
 - Flake `inputs` — deterministic and well-understood, but fixed to the flake URL grammar and tied to `flake.lock`. nix-externals is intentionally not a flake-input mechanism.
 - [dream2nix](https://github.com/nix-community/dream2nix) — much larger scope. nix-externals is closer to the lock-file primitive underneath.

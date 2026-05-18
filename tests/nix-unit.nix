@@ -7,12 +7,14 @@ let
         { pkgs, ... }:
         {
           externals.stateDir = ./fixtures/_externals;
-          externals.producers.custom = pkgs.writeShellApplication {
-            name = "custom";
-            text = "echo custom";
+          externals.ready-thing.producer = pkgs.writeShellApplication {
+            name = "ready-thing";
+            text = "true";
           };
-          exec.ready-future.input = "true";
-          exec.pending-future.input = "true";
+          externals.pending-thing.producer = pkgs.writeShellApplication {
+            name = "pending-thing";
+            text = "true";
+          };
         }
       )
     ];
@@ -20,13 +22,7 @@ let
   };
 in
 {
-  # Direct registration: a producer assigned to externals.producers.<key> is preserved.
-  testCustomProducerRegistered = {
-    expr = eval.config.externals.producers ? custom;
-    expected = true;
-  };
-
-  # Bare-path coercion: setting externals.stateDir to a path populates evalPath.
+  # Bare-path coercion populates evalPath from the assigned path.
   testStateDirCoercion = {
     expr = builtins.isString (toString eval.config.externals.stateDir.evalPath);
     expected = true;
@@ -38,39 +34,41 @@ in
     expected = true;
   };
 
-  # exec provider - ready state (marker file exists)
-  testExecReadyIsTrue = {
-    expr = eval.config.exec.ready-future.ready;
+  # ready=true when the fixture <name>.nix exists.
+  testReadyIsTrue = {
+    expr = eval.config.externals.ready-thing.ready;
     expected = true;
   };
 
-  testExecReadyValueIsPath = {
-    expr = builtins.isString (toString eval.config.exec.ready-future.value);
-    expected = true;
+  # value imports the fixture file's contents.
+  testValueImported = {
+    expr = eval.config.externals.ready-thing.value;
+    expected = {
+      msg = "hello";
+    };
   };
 
-  # exec provider - not ready
-  testExecPendingIsFalse = {
-    expr = eval.config.exec.pending-future.ready;
+  # ready=false when the fixture is absent.
+  testPendingIsFalse = {
+    expr = eval.config.externals.pending-thing.ready;
     expected = false;
   };
 
-  testExecPendingValueThrows = {
-    expr = !(builtins.tryEval eval.config.exec.pending-future.value).success;
+  # Reading value on a not-ready external throws.
+  testPendingValueThrows = {
+    expr = !(builtins.tryEval eval.config.externals.pending-thing.value).success;
     expected = true;
   };
 
-  # Aggregator is a derivation
+  # Aggregator is a derivation.
   testExternalsPollIsDerivation = {
     expr = eval.config.externals.poll ? drvPath;
     expected = true;
   };
 
-  # Provider only emits producer entries for not-ready exec entries.
-  testProducerEmittedForPendingOnly = {
-    expr =
-      (eval.config.externals.producers ? "exec-pending-future")
-      && !(eval.config.externals.producers ? "exec-ready-future");
+  # Producer registration via externals.<name>.producer is observable.
+  testProducerRegistered = {
+    expr = eval.config.externals ? ready-thing && eval.config.externals.ready-thing ? producer;
     expected = true;
   };
 }
