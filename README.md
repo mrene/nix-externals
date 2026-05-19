@@ -4,14 +4,13 @@ Declare values that need external resolution next to the code that uses them.
 
 A lot of work in Nix happens out of band. Dependency pins live in a separate `npins/` or `niv/` directory. Fixed-output derivation hashes get pasted in after a build fails. `gomod2nix.toml` and its .NET cousin have to be regenerated whenever inputs change. `nix2container` wants a fetched image manifest sitting next to your package. The recurring shape is the same: some value needs to be resolved by an external program, written somewhere, and then read back during evaluation — and the declaration of *what* to resolve typically lives far away from the code that consumes the result.
 
-nix-externals is an evalModules module that gives this pattern a uniform shape. Each external is identified by a name; its `producer` is a script that writes `$STATE_DIR/<name>.nix`; the framework reports `ready` based on file presence and exposes `value = import "$STATE_DIR/<name>.nix"`. A single aggregator (`externals-run`) walks every not-yet-ready entry and runs its producer. The next evaluation picks up the materialized state.
+nix-externals is an evalModules module that gives this pattern a uniform shape. Each external is identified by a name; its `producer` is a shell snippet that writes a Nix expression to `$OUT`; the framework reads it back as `value` and reports `ready` based on file presence. A single aggregator (`externals-run`) walks every not-yet-ready entry and runs its producer. The next evaluation picks up the materialized state.
 
 This is an experiment. The implementation aims for the minimum needed to be useful; expect rough edges.
 
 ## Using it
 
-`nix-externals` is an evalModules module first. The flake exposes both a flake-parts wrapper and the underlying module set, so it drops into anything evalModules already drives:
-
+`nix-externals` is module system agnostic. It plugs into any evalModules-based system and has no external dependencies. The flake exposes both a flake-parts wrapper and the underlying module set.
 ```nix
 # flake-parts
 imports = [ inputs.nix-externals.flakeModule ];
@@ -116,8 +115,5 @@ externals.assets.producer = ''
 
 ## Related
 
-- [clan vars](https://clan.lol/docs/25.11/guides/vars/vars-overview) — same general shape: vars are declared inside NixOS modules and materialized by `clan vars generate`. Clan is scoped to NixOS fleet management with first-class secret handling (sops, password-store); nix-externals is the underlying primitive.
-- [npins](https://github.com/andir/npins) — pin manager with its own CLI and a separate `npins/` directory. The motivating difference is co-located declarations.
-- [niv](https://github.com/nmattia/niv) — same shape as npins, predates it. Same separation-of-declaration tradeoff.
-- Flake `inputs` — deterministic and well-understood, but fixed to the flake URL grammar and tied to `flake.lock`. nix-externals is intentionally not a flake-input mechanism.
-- [dream2nix](https://github.com/nix-community/dream2nix) — much larger scope. nix-externals is closer to the lock-file primitive underneath.
+- [dream2nix](https://github.com/nix-community/dream2nix) and its lock module.
+- [clan vars](https://clan.lol/docs/25.11/guides/vars/vars-overview) same general shape: vars are declared inside NixOS modules and materialized by `clan vars generate`.
