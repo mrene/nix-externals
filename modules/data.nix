@@ -35,18 +35,19 @@ let
     {
       options = {
         producer = lib.mkOption {
-          # `anything` rather than a narrower string-or-function type: the module system's
-          # `functionTo` / `either` wrap function definitions to support definition-merging
-          # semantics that don't fit here — we want the bare value stored as-is and dispatch
-          # on `isFunction` at aggregator time.
-          type = lib.types.anything;
+          # `raw` rather than a narrower string-or-function type: the module system's
+          # `functionTo` / `either` / `anything` all wrap function definitions in ways that
+          # strip the `lib.functionArgs` metadata `callPackage` needs to resolve named
+          # dependencies. `raw` passes the value through untouched.
+          type = lib.types.raw;
           description = ''
-            Shell snippet that materializes this external. Either a plain string or a function
-            `pkgs: string` — the framework resolves the function with the aggregator's `pkgs`
-            when building the runner. The framework exports `$OUT` pointing at
-            `$STATE_DIR/${config.filename}` and `$STATE_DIR` for sidecar files. Write the
-            resolved artifact to `$OUT`. The framework only invokes the producer when the
-            external is not yet ready, so no in-script self-skip is needed.
+            Shell snippet that materializes this external. Either a plain string or a
+            nixpkgs-style attrset function (`{ curl, lib, ... }: string`) — the framework
+            resolves the function via `pkgs.callPackage` when building the runner, injecting
+            arguments by name from the aggregator's `pkgs`. The framework exports `$OUT`
+            pointing at `$STATE_DIR/${config.filename}` and `$STATE_DIR` for sidecar files.
+            Write the resolved artifact to `$OUT`. The framework only invokes the producer
+            when the external is not yet ready, so no in-script self-skip is needed.
           '';
         };
         filename = lib.mkOption {

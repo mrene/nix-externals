@@ -176,15 +176,15 @@ config.externals.codegen.nixValue   # { message = "hello"; }
 
 ### Producers that reference `pkgs`
 
-When a producer needs `pkgs` (to compose store paths or pull in tools), declare it as a function `pkgs: shellSnippet`. The aggregator applies the function with its own `pkgs` when building the runner. This lets you declare the external at the flake-parts top level even though `pkgs` is per-system:
+When a producer needs to interpolate store paths or call tools by their package, declare it in nixpkgs-style attrset form. The aggregator resolves it via `pkgs.callPackage`, so dependencies are pulled from `pkgs` by name — just like a regular nixpkgs derivation:
 
 ```nix
-externals.versions.producer = pkgs: ''
-  ${pkgs.curl}/bin/curl -fsSL https://example.com/versions.json > "$OUT"
+externals.versions.producer = { curl, lib, ... }: ''
+  ${lib.getExe curl} -fsSL https://example.com/versions.json > "$OUT"
 '';
 ```
 
-The plain-string form (`producer = "…"`) and the function form (`producer = pkgs: "…"`) are interchangeable; use whichever fits the declaration site.
+This works at the flake-parts top level (where `pkgs` isn't yet in scope), since the function is only evaluated when the aggregator builds. The plain-string form (`producer = "…"`) and the attrset-function form are interchangeable; use the function form whenever you need anything from `pkgs`.
 
 ### Just need a path
 

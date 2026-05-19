@@ -36,7 +36,8 @@ in
     let
       producers = lib.filterAttrs (_: v: lib.isAttrs v && v ? producer) topConfig.externals;
       notReady = lib.filterAttrs (_: cfg: !cfg.ready) producers;
-      resolveProducer = cfg: if lib.isFunction cfg.producer then cfg.producer pkgs else cfg.producer;
+      resolveProducer =
+        cfg: if lib.isFunction cfg.producer then pkgs.callPackage cfg.producer { } else cfg.producer;
       producerDrvs = lib.mapAttrs (
         name: cfg:
         pkgs.writeShellApplication {

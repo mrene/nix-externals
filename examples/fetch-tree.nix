@@ -5,9 +5,9 @@
 # wraps it in `builtins.fetchTree` and re-exports as `fetch-tree.<name>.value` for
 # callers that prefer the per-provider namespace.
 #
-# Producers are declared in function form (`pkgs: shellSnippet`) so this module can be
-# imported at flake-parts top level, where `pkgs` is not yet available — the aggregator
-# applies `pkgs` when building the runner.
+# Producers are declared in nixpkgs-style attrset form (`{ nix, writeText, lib }: …`)
+# so this module can be imported at flake-parts top level — the aggregator resolves
+# dependencies via `pkgs.callPackage` when building the runner.
 {
   lib,
   config,
@@ -36,14 +36,18 @@ in
       inherit (cfg) cacheKey;
       filename = "fetch-tree-${name}.json";
       producer =
-        pkgs:
+        {
+          nix,
+          writeText,
+          lib,
+        }:
         let
-          inputFile = pkgs.writeText "fetch-tree-${name}-input.json" (
+          inputFile = writeText "fetch-tree-${name}-input.json" (
             builtins.toJSON (toFetchTreeInput cfg.input)
           );
         in
         ''
-          ${lib.getExe' pkgs.nix "nix-instantiate"} --eval --strict --json --expr "
+          ${lib.getExe' nix "nix-instantiate"} --eval --strict --json --expr "
             let
               input = builtins.fromJSON (builtins.readFile ${inputFile});
               tree = builtins.fetchTree input;

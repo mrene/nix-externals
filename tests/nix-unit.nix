@@ -18,8 +18,8 @@ let
           filename = "deps.json";
         };
         externals.fn-form = {
-          # Function-form producer: aggregator resolves it with its own pkgs.
-          producer = p: ''${p.coreutils}/bin/echo '{}' > "$OUT"'';
+          # callPackage-style producer: deps named in the attrset get pulled from pkgs.
+          producer = { coreutils, lib, ... }: ''${lib.getExe' coreutils "echo"} '{}' > "$OUT"'';
         };
         externals.keyed-match = {
           producer = ''echo '{}' > "$OUT"'';
