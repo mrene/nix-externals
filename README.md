@@ -136,6 +136,26 @@ fetch-tree.flake-root.input.github = {
 
 `fetch-tree.<name>.cacheKey` is forwarded to the underlying external — bump it to force a re-lock without touching `input`.
 
+## Computing FOD hashes
+
+When you have a fixed-output derivation whose hash you don't know yet — a vendored Cargo lockfile, a Go module, a fetched tarball — `nix-externals.lib.mkFodHashProducer` returns a producer that builds the derivation, captures the `got: sha256-…` line from the resulting hash-mismatch error (or reads the recorded hash if the build happened to match), and writes the real hash to `$OUT`. Ported from dream2nix's `computeFODHash`.
+
+Wire the FOD's `outputHash` straight back to the external — `nix-externals.lib.readyOr` breaks the chicken-and-egg between "need a drvPath to hash" and "need a hash to build":
+
+```nix
+let
+  nx = inputs.nix-externals.lib;
+  cargoVendor = pkgs.rustPlatform.fetchCargoVendor {
+    src = ./.;
+    hash = nx.readyOr lib.fakeHash config.externals.cargo-vendor-hash;
+  };
+in {
+  externals.cargo-vendor-hash.producer = nx.mkFodHashProducer { drv = cargoVendor; };
+}
+```
+
+First eval: the external isn't ready, `cargoVendor` builds against `lib.fakeHash`; `nix run .#externals-run` invokes the producer, which builds that drv, parses the mismatch, writes the real hash. Subsequent evals see the external as ready and `cargoVendor` uses the materialized hash. Bump `externals.cargo-vendor-hash.cacheKey` to force a re-hash when inputs change.
+
 ## Rolling your own
 
 A producer is a shell snippet. Write the resolved artifact to `$OUT` and pick the decoder that matches the format you wrote.

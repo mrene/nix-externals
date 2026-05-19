@@ -1,6 +1,11 @@
 let
   pkgs = import <nixpkgs> { };
   lib = pkgs.lib;
+  nix-externals-lib = import ../lib;
+  inherit (nix-externals-lib) mkFodHashProducer readyOr;
+  fodHashProducer = mkFodHashProducer { drv = pkgs.hello; };
+  fodHashScript = pkgs.callPackage fodHashProducer { };
+  fodHashScriptOther = pkgs.callPackage (mkFodHashProducer { drv = pkgs.coreutils; }) { };
   eval = lib.evalModules {
     modules = [
       ../modules
@@ -236,5 +241,38 @@ in
   testDataLayerHasNoRuntimePath = {
     expr = dataEval.config.externals ? runtimePath;
     expected = false;
+  };
+
+  # mkFodHashProducer returns a callPackage-style function — callable by the
+  # aggregator without further wrapping.
+  testMkFodHashProducerIsFunction = {
+    expr = lib.isFunction fodHashProducer;
+    expected = true;
+  };
+
+  # Resolving the producer through pkgs yields a shell snippet (string),
+  # which is what writeShellApplication expects in `.text`.
+  testMkFodHashProducerResolvesToString = {
+    expr = builtins.isString fodHashScript;
+    expected = true;
+  };
+
+  # Different inputs produce different scripts — proves the closure captures
+  # per-drv state instead of being a constant.
+  testMkFodHashProducerParametrizesByDrv = {
+    expr = fodHashScript != fodHashScriptOther;
+    expected = true;
+  };
+
+  # readyOr returns the materialized stringValue on a ready external.
+  testReadyOrReady = {
+    expr = readyOr "fallback" eval.config.externals.string-thing;
+    expected = "hello";
+  };
+
+  # readyOr returns the fallback on a not-ready external, without throwing.
+  testReadyOrNotReady = {
+    expr = readyOr "fallback" eval.config.externals.pending-thing;
+    expected = "fallback";
   };
 }

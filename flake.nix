@@ -48,6 +48,7 @@
         flakeModule = inputs.flake-parts.lib.importApply ./flake-module.nix {
           inherit (inputs) flake-root;
         };
+        lib = import ./lib;
       };
     };
 }
