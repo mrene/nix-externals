@@ -198,6 +198,14 @@ let
           type = fetchTreeInputType;
           description = "Flake URL string or structured fetchTree reference.";
         };
+        cacheKey = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          description = ''
+            Optional cache-bust string forwarded to the underlying external. Bump it to force
+            a re-lock without changing `input`. See `externals.<name>.cacheKey`.
+          '';
+        };
         ready = lib.mkOption {
           type = lib.types.bool;
           default = config.externals.${extKey}.ready;

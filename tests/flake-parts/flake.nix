@@ -31,6 +31,7 @@
             externals.test-gen.producer = ''
               echo '{ message = "hello from a bare external"; }' > "$OUT"
             '';
+            externals.test-gen.cacheKey = "v1";
 
             packages.greeting = pkgs.writeText "greeting.txt" config.externals.test-gen.value.message;
 

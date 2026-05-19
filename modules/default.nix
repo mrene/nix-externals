@@ -5,6 +5,8 @@
   ...
 }:
 let
+  topConfig = config;
+
   stateDirSubmodule = lib.types.submodule (
     { config, ... }:
     {
@@ -30,10 +32,17 @@ let
   stateDirType = lib.types.coercedTo lib.types.path (p: { evalPath = p; }) stateDirSubmodule;
 
   externalEntry =
-    { name, ... }:
+    { name, config, ... }:
     let
-      valueFile = "${toString config.externals.stateDir.evalPath}/${name}.nix";
-      ready = builtins.pathExists valueFile;
+      stateDir = topConfig.externals.stateDir.evalPath;
+      valueFile = "${toString stateDir}/${name}.nix";
+      cacheKeyFile = "${toString stateDir}/${name}.cacheKey";
+      storedKey =
+        if builtins.pathExists cacheKeyFile then
+          lib.removeSuffix "\n" (builtins.readFile cacheKeyFile)
+        else
+          null;
+      ready = builtins.pathExists valueFile && (config.cacheKey == null || storedKey == config.cacheKey);
     in
     {
       options = {
@@ -46,11 +55,25 @@ let
             is not yet ready, so no in-script self-skip is needed.
           '';
         };
+        cacheKey = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          description = ''
+            Opt-in cache-bust value. When set, the framework writes the literal string to
+            `$STATE_DIR/${name}.cacheKey` after the producer succeeds and compares it on the
+            next evaluation: a mismatch (or missing sidecar) flips `ready` back to false so
+            the next `externals-run` re-invokes the producer. Bump this string whenever you
+            need to force re-materialization. `null` disables the check (default).
+          '';
+        };
         ready = lib.mkOption {
           type = lib.types.bool;
           default = ready;
           readOnly = true;
-          description = "True iff `$STATE_DIR/${name}.nix` exists at evaluation time.";
+          description = ''
+            True iff `$STATE_DIR/${name}.nix` exists and, when `cacheKey` is set, the matching
+            `$STATE_DIR/${name}.cacheKey` sidecar holds the same string.
+          '';
         };
         value = lib.mkOption {
           type = lib.types.anything;
@@ -121,6 +144,12 @@ in
         OUT="$STATE_DIR/${name}.nix"
         export OUT
         ${lib.getExe producerDrvs.${name}}
+        ${
+          if notReady.${name}.cacheKey == null then
+            ''rm -f "$STATE_DIR/${name}.cacheKey"''
+          else
+            ''printf '%s' ${lib.escapeShellArg notReady.${name}.cacheKey} > "$STATE_DIR/${name}.cacheKey"''
+        }
       '') (lib.attrNames producerDrvs)}
     '';
   };

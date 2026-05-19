@@ -8,6 +8,18 @@ let
         externals.stateDir = ./fixtures/_externals;
         externals.ready-thing.producer = ''echo '{}' > "$OUT"'';
         externals.pending-thing.producer = ''echo '{}' > "$OUT"'';
+        externals.keyed-match = {
+          producer = ''echo '{}' > "$OUT"'';
+          cacheKey = "v1";
+        };
+        externals.keyed-mismatch = {
+          producer = ''echo '{}' > "$OUT"'';
+          cacheKey = "v1";
+        };
+        externals.keyed-missing-sidecar = {
+          producer = ''echo '{}' > "$OUT"'';
+          cacheKey = "v1";
+        };
       }
     ];
     specialArgs = { inherit pkgs; };
@@ -84,6 +96,40 @@ in
   # Aggregator exports OUT before each producer invocation.
   testRunExportsOut = {
     expr = lib.hasInfix "OUT=\"$STATE_DIR/pending-thing.nix\"" (
+      builtins.unsafeDiscardStringContext eval.config.externals.run.text
+    );
+    expected = true;
+  };
+
+  # cacheKey matching the sidecar leaves ready=true.
+  testCacheKeyMatchReady = {
+    expr = eval.config.externals.keyed-match.ready;
+    expected = true;
+  };
+
+  # cacheKey set but sidecar holds a different value flips ready=false.
+  testCacheKeyMismatchNotReady = {
+    expr = eval.config.externals.keyed-mismatch.ready;
+    expected = false;
+  };
+
+  # cacheKey set but sidecar absent flips ready=false even if the value file exists.
+  testCacheKeyMissingSidecarNotReady = {
+    expr = eval.config.externals.keyed-missing-sidecar.ready;
+    expected = false;
+  };
+
+  # Aggregator writes the cacheKey sidecar after a producer with cacheKey runs.
+  testRunWritesCacheKeySidecar = {
+    expr = lib.hasInfix "printf '%s' v1 > \"$STATE_DIR/keyed-mismatch.cacheKey\"" (
+      builtins.unsafeDiscardStringContext eval.config.externals.run.text
+    );
+    expected = true;
+  };
+
+  # Aggregator removes any stale sidecar when cacheKey is null.
+  testRunRemovesCacheKeySidecarWhenUnset = {
+    expr = lib.hasInfix "rm -f \"$STATE_DIR/pending-thing.cacheKey\"" (
       builtins.unsafeDiscardStringContext eval.config.externals.run.text
     );
     expected = true;

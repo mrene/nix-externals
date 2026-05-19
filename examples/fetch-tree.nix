@@ -35,6 +35,7 @@ in
       );
     in
     lib.nameValuePair "fetch-tree-${name}" {
+      inherit (cfg) cacheKey;
       producer = ''
         locked=$(${lib.getExe' pkgs.nix "nix-instantiate"} --eval --strict --json --expr "
           let

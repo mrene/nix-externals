@@ -1,9 +1,11 @@
 # nix-externals
-
 Declare values that need external resolution next to the code that uses them.
 
+## Why
 A lot of work in Nix happens out of band. Dependency pins live in a separate `npins/` or `niv/` directory. Fixed-output derivation hashes get pasted in after a build fails. `gomod2nix.toml` and its .NET cousin have to be regenerated whenever inputs change. `nix2container` wants a fetched image manifest sitting next to your package. The recurring shape is the same: some value needs to be resolved by an external program, written somewhere, and then read back during evaluation — and the declaration of *what* to resolve typically lives far away from the code that consumes the result.
 
+
+## How
 nix-externals is an evalModules module that gives this pattern a uniform shape. Each external is identified by a name; its `producer` is a shell snippet that writes a Nix expression to `$OUT`; the framework reads it back as `value` and reports `ready` based on file presence. A single aggregator (`externals-run`) walks every not-yet-ready entry and runs its producer. The next evaluation picks up the materialized state.
 
 This is an experiment. The implementation aims for the minimum needed to be useful; expect rough edges.
@@ -61,13 +63,24 @@ The first evaluation throws: `external 'fetch-tree-dotfiles' not ready. Run 'nix
 
 ## How it works
 
-Each external is a freeform entry under `externals.<name>` with three sub-options:
+Each external is a freeform entry under `externals.<name>` with four sub-options:
 
 * `producer` — a shell snippet that writes the resolved Nix expression to `$OUT`. The framework wraps it in `pkgs.writeShellApplication` (shellcheck included) and only invokes it when the external is not yet ready, so no self-skip is needed.
-* `ready` — `builtins.pathExists "$STATE_DIR/<name>.nix"`. Cheap; safe to branch on with `lib.mkIf`.
+* `cacheKey` (optional) — a string the framework persists to `$STATE_DIR/<name>.cacheKey` after a successful run and re-checks on every evaluation. Mismatch (or missing sidecar) flips `ready` back to false. `null` (default) disables the check.
+* `ready` — true iff `$STATE_DIR/<name>.nix` exists and, when `cacheKey` is set, the sidecar matches it. Cheap; safe to branch on with `lib.mkIf`.
 * `value` — `import "$STATE_DIR/<name>.nix"` once ready; throws otherwise.
 
 When the aggregator at `externals.run` (exposed as `packages.externals-run` under flake-parts) invokes a producer, it exports `$OUT` pointing at `$STATE_DIR/<name>.nix` and `$STATE_DIR` for sidecar files. Ready entries are skipped at evaluation time — the aggregator's script only references producers it actually needs to invoke.
+
+## Cache-busting
+
+Set `externals.<name>.cacheKey` to any string you'd like to invalidate on. Bumping it forces the next `nix run .#externals-run` to re-invoke the producer:
+
+```nix
+externals.codegen.cacheKey = "2026-05-18";   # bump to force re-materialization
+```
+
+There's no auto-derivation from inputs — the string is whatever you want it to be (a version, a date, a hash of upstream metadata you fetched separately). Clearing it back to `null` removes any stale `<name>.cacheKey` sidecar on the next run.
 
 ## Examples
 
@@ -88,6 +101,8 @@ fetch-tree.flake-root.input.github = {
 
 # config.fetch-tree.nixpkgs.value is a source tree (has outPath)
 ```
+
+`fetch-tree.<name>.cacheKey` is forwarded to the underlying external — bump it to force a re-lock without touching `input`.
 
 ## Rolling your own
 
