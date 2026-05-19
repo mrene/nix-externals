@@ -27,6 +27,21 @@
               pkgs.nix-unit
             ];
           };
+
+          checks.unit =
+            pkgs.runCommand "nix-unit-tests"
+              {
+                nativeBuildInputs = [ pkgs.nix-unit ];
+              }
+              ''
+                export HOME=$TMPDIR
+                export NIX_PATH=nixpkgs=${pkgs.path}
+                nix-unit \
+                  --eval-store "$HOME" \
+                  --extra-experimental-features 'nix-command flakes' \
+                  ${inputs.self}/tests/nix-unit.nix
+                touch $out
+              '';
         };
 
       flake = {
