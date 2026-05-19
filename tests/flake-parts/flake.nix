@@ -28,14 +28,9 @@
 
             externals.stateDir = ./_externals;
 
-            externals.test-gen.producer = pkgs.writeShellApplication {
-              name = "test-gen";
-              text = ''
-                out="$STATE_DIR/test-gen.nix"
-                if [ -e "$out" ]; then exit 0; fi
-                echo '{ message = "hello from a bare external"; }' > "$out"
-              '';
-            };
+            externals.test-gen.producer = ''
+              echo '{ message = "hello from a bare external"; }' > "$OUT"
+            '';
 
             packages.greeting = pkgs.writeText "greeting.txt" config.externals.test-gen.value.message;
 

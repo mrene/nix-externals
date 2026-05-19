@@ -4,20 +4,11 @@ let
   eval = lib.evalModules {
     modules = [
       ../modules
-      (
-        { pkgs, ... }:
-        {
-          externals.stateDir = ./fixtures/_externals;
-          externals.ready-thing.producer = pkgs.writeShellApplication {
-            name = "ready-thing";
-            text = "true";
-          };
-          externals.pending-thing.producer = pkgs.writeShellApplication {
-            name = "pending-thing";
-            text = "true";
-          };
-        }
-      )
+      {
+        externals.stateDir = ./fixtures/_externals;
+        externals.ready-thing.producer = ''echo '{}' > "$OUT"'';
+        externals.pending-thing.producer = ''echo '{}' > "$OUT"'';
+      }
     ];
     specialArgs = { inherit pkgs; };
   };
@@ -67,28 +58,34 @@ in
     expected = true;
   };
 
-  # Producer registration via externals.<name>.producer is observable.
-  testProducerRegistered = {
-    expr = eval.config.externals ? ready-thing && eval.config.externals.ready-thing ? producer;
+  # Producer is a plain shell snippet (string).
+  testProducerIsString = {
+    expr = builtins.isString eval.config.externals.ready-thing.producer;
     expected = true;
   };
 
-  # Aggregator skips ready entries: its script text references the pending
-  # producer's outPath but not the ready one's.
+  # Aggregator wraps each not-ready producer as a shellApplication with name=<key>,
+  # so /bin/<key> appears in the run script for pending entries and not for ready ones.
   testRunFiltersReadyEntries = {
     expr =
       let
         runText = builtins.unsafeDiscardStringContext eval.config.externals.run.text;
-        readyOut = builtins.unsafeDiscardStringContext eval.config.externals.ready-thing.producer.outPath;
-        pendingOut = builtins.unsafeDiscardStringContext eval.config.externals.pending-thing.producer.outPath;
       in
       {
-        excludesReady = !(lib.hasInfix readyOut runText);
-        includesPending = lib.hasInfix pendingOut runText;
+        excludesReady = !(lib.hasInfix "/bin/ready-thing" runText);
+        includesPending = lib.hasInfix "/bin/pending-thing" runText;
       };
     expected = {
       excludesReady = true;
       includesPending = true;
     };
+  };
+
+  # Aggregator exports OUT before each producer invocation.
+  testRunExportsOut = {
+    expr = lib.hasInfix "OUT=\"$STATE_DIR/pending-thing.nix\"" (
+      builtins.unsafeDiscardStringContext eval.config.externals.run.text
+    );
+    expected = true;
   };
 }

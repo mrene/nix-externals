@@ -242,27 +242,21 @@ in
       );
     in
     lib.nameValuePair "fetch-tree-${name}" {
-      producer = pkgs.writeShellApplication {
-        name = "fetch-tree-${name}";
-        runtimeInputs = [ pkgs.nix ];
-        text = ''
-          out="$STATE_DIR/fetch-tree-${name}.nix"
-          if [ -e "$out" ]; then exit 0; fi
-          locked=$(nix-instantiate --eval --strict --json --expr "
-            let
-              input = builtins.fromJSON (builtins.readFile ${inputFile});
-              tree = builtins.fetchTree input;
-              locked = { narHash = tree.narHash; }
-                // (if tree ? rev then { rev = tree.rev; } else { });
-            in input // locked
-          ")
-          cat > "$out" <<NIX_EOF
-          builtins.fetchTree (builtins.fromJSON '''
-          $locked
-          ''')
-          NIX_EOF
-        '';
-      };
+      producer = ''
+        locked=$(${pkgs.nix}/bin/nix-instantiate --eval --strict --json --expr "
+          let
+            input = builtins.fromJSON (builtins.readFile ${inputFile});
+            tree = builtins.fetchTree input;
+            locked = { narHash = tree.narHash; }
+              // (if tree ? rev then { rev = tree.rev; } else { });
+          in input // locked
+        ")
+        cat > "$OUT" <<NIX_EOF
+        builtins.fetchTree (builtins.fromJSON '''
+        $locked
+        ''')
+        NIX_EOF
+      '';
     }
   ) config.fetch-tree;
 }

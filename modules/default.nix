@@ -38,11 +38,12 @@ let
     {
       options = {
         producer = lib.mkOption {
-          type = lib.types.package;
+          type = lib.types.str;
           description = ''
-            Script that materializes this external. Must write a Nix expression to
-            `$STATE_DIR/${name}.nix` on success. Expected to be idempotent — running it again
-            when the file already exists should be a no-op.
+            Shell snippet that materializes this external. The framework exports `$OUT` pointing
+            at `$STATE_DIR/${name}.nix` and `$STATE_DIR` for sidecar files. Write the resolved
+            Nix expression to `$OUT`. The framework only invokes the producer when the external
+            is not yet ready, so no in-script self-skip is needed.
           '';
         };
         ready = lib.mkOption {
@@ -67,11 +68,19 @@ let
   # and any added by wrappers like relativeStateDir) are excluded by shape.
   producers = lib.filterAttrs (_: v: lib.isAttrs v && v ? producer) config.externals;
   notReady = lib.filterAttrs (_: cfg: !cfg.ready) producers;
+
+  producerDrvs = lib.mapAttrs (
+    name: cfg:
+    pkgs.writeShellApplication {
+      inherit name;
+      text = cfg.producer;
+    }
+  ) notReady;
 in
 {
   options.externals = lib.mkOption {
     description = ''
-      Registry of externally-resolved values. Each `externals.<name>` declares a `producer` script
+      Registry of externally-resolved values. Each `externals.<name>` declares a `producer` snippet
       that writes `$STATE_DIR/<name>.nix`; the framework reads that file back as `value` and
       reports `ready` based on its presence.
     '';
@@ -109,8 +118,10 @@ in
       mkdir -p "$STATE_DIR"
       ${lib.concatMapStringsSep "\n" (name: ''
         echo "Running: ${name}"
-        ${lib.getExe notReady.${name}.producer}
-      '') (lib.attrNames notReady)}
+        OUT="$STATE_DIR/${name}.nix"
+        export OUT
+        ${lib.getExe producerDrvs.${name}}
+      '') (lib.attrNames producerDrvs)}
     '';
   };
 }

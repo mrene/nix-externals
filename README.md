@@ -64,11 +64,11 @@ The first evaluation throws: `external 'fetch-tree-dotfiles' not ready. Run 'nix
 
 Each external is a freeform entry under `externals.<name>` with three sub-options:
 
-* `producer` — a `writeShellApplication` (or any package with a `mainProgram`) that, when run, writes `$STATE_DIR/<name>.nix`. Must be idempotent.
+* `producer` — a shell snippet that writes the resolved Nix expression to `$OUT`. The framework wraps it in `pkgs.writeShellApplication` (shellcheck included) and only invokes it when the external is not yet ready, so no self-skip is needed.
 * `ready` — `builtins.pathExists "$STATE_DIR/<name>.nix"`. Cheap; safe to branch on with `lib.mkIf`.
 * `value` — `import "$STATE_DIR/<name>.nix"` once ready; throws otherwise.
 
-The aggregator at `externals.run` (exposed as `packages.externals-run` under flake-parts) runs the producer for every not-yet-ready entry. Ready entries are skipped at evaluation time — the aggregator's script only references producers it actually needs to invoke.
+When the aggregator at `externals.run` (exposed as `packages.externals-run` under flake-parts) invokes a producer, it exports `$OUT` pointing at `$STATE_DIR/<name>.nix` and `$STATE_DIR` for sidecar files. Ready entries are skipped at evaluation time — the aggregator's script only references producers it actually needs to invoke.
 
 ## Examples
 
@@ -92,36 +92,26 @@ fetch-tree.flake-root.input.github = {
 
 ## Rolling your own
 
-If none of the examples fit, register a producer directly. The framework gives you `ready` and `value` for free:
+A producer is a shell snippet. Write the resolved Nix expression to `$OUT`:
 
 ```nix
-externals.codegen.producer = pkgs.writeShellApplication {
-  name = "codegen";
-  text = ''
-    out="$STATE_DIR/codegen.nix"
-    if [ -e "$out" ]; then exit 0; fi
-    # ... compute something ...
-    echo '{ message = "hello"; }' > "$out"
-  '';
-};
+externals.codegen.producer = ''
+  # ... compute something ...
+  echo '{ message = "hello"; }' > "$OUT"
+'';
 
 # At your use site:
 myValue = config.externals.codegen.value;   # { message = "hello"; }
 ```
 
-For sidecar files (extracted archives, fetched keys), have the producer write its scratch state wherever it likes — only the `$STATE_DIR/<name>.nix` file is load-bearing for the framework. A common pattern is a sibling directory:
+For sidecar files (extracted archives, fetched keys), the producer writes its scratch state wherever it likes — only `$OUT` (which the framework points at `$STATE_DIR/<name>.nix`) is load-bearing. A common pattern is a sibling directory:
 
 ```nix
-externals.assets.producer = pkgs.writeShellApplication {
-  name = "assets";
-  text = ''
-    out="$STATE_DIR/assets.nix"
-    if [ -e "$out" ]; then exit 0; fi
-    mkdir -p "$STATE_DIR/assets.d"
-    curl ... | tar xz -C "$STATE_DIR/assets.d"
-    echo "./assets.d" > "$out"     # path resolves relative to assets.nix
-  '';
-};
+externals.assets.producer = ''
+  mkdir -p "$STATE_DIR/assets.d"
+  curl ... | tar xz -C "$STATE_DIR/assets.d"
+  echo "./assets.d" > "$OUT"     # path resolves relative to assets.nix
+'';
 ```
 
 ## Related
