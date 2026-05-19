@@ -8,6 +8,15 @@ let
         externals.stateDir = ./fixtures/_externals;
         externals.ready-thing.producer = ''echo '{}' > "$OUT"'';
         externals.pending-thing.producer = ''echo '{}' > "$OUT"'';
+        externals.string-thing.producer = ''echo 'hello' > "$OUT"'';
+        externals.json-thing = {
+          producer = ''echo '{}' > "$OUT"'';
+          filename = "json-thing.json";
+        };
+        externals.custom-named = {
+          producer = ''echo '{}' > "$OUT"'';
+          filename = "deps.json";
+        };
         externals.keyed-match = {
           producer = ''echo '{}' > "$OUT"'';
           cacheKey = "v1";
@@ -38,18 +47,39 @@ in
     expected = true;
   };
 
-  # ready=true when the fixture <name>.nix exists.
+  # ready=true when the fixture file exists.
   testReadyIsTrue = {
     expr = eval.config.externals.ready-thing.ready;
     expected = true;
   };
 
-  # value imports the fixture file's contents.
-  testValueImported = {
-    expr = eval.config.externals.ready-thing.value;
+  # nixValue imports the fixture file's contents.
+  testNixValue = {
+    expr = eval.config.externals.ready-thing.nixValue;
     expected = {
       msg = "hello";
     };
+  };
+
+  # stringValue returns trimmed file contents.
+  testStringValue = {
+    expr = eval.config.externals.string-thing.stringValue;
+    expected = "hello";
+  };
+
+  # jsonValue parses the fixture file as JSON.
+  testJsonValue = {
+    expr = eval.config.externals.json-thing.jsonValue;
+    expected = {
+      msg = "from-json";
+      count = 42;
+    };
+  };
+
+  # path is exposed even when the external is not ready.
+  testPathAlwaysExposed = {
+    expr = eval.config.externals.pending-thing.path;
+    expected = toString ./fixtures/_externals + "/pending-thing";
   };
 
   # ready=false when the fixture is absent.
@@ -58,9 +88,19 @@ in
     expected = false;
   };
 
-  # Reading value on a not-ready external throws.
-  testPendingValueThrows = {
-    expr = !(builtins.tryEval eval.config.externals.pending-thing.value).success;
+  # Reading any decoder on a not-ready external throws.
+  testPendingNixValueThrows = {
+    expr = !(builtins.tryEval eval.config.externals.pending-thing.nixValue).success;
+    expected = true;
+  };
+
+  testPendingStringValueThrows = {
+    expr = !(builtins.tryEval eval.config.externals.pending-thing.stringValue).success;
+    expected = true;
+  };
+
+  testPendingJsonValueThrows = {
+    expr = !(builtins.tryEval eval.config.externals.pending-thing.jsonValue).success;
     expected = true;
   };
 
@@ -93,9 +133,17 @@ in
     };
   };
 
-  # Aggregator exports OUT before each producer invocation.
+  # Aggregator exports OUT using the external's filename (default = name, no extension).
   testRunExportsOut = {
-    expr = lib.hasInfix "OUT=\"$STATE_DIR/pending-thing.nix\"" (
+    expr = lib.hasInfix "OUT=\"$STATE_DIR/pending-thing\"" (
+      builtins.unsafeDiscardStringContext eval.config.externals.run.text
+    );
+    expected = true;
+  };
+
+  # Custom filename flows through to the aggregator's $OUT export.
+  testRunUsesCustomFilename = {
+    expr = lib.hasInfix "OUT=\"$STATE_DIR/deps.json\"" (
       builtins.unsafeDiscardStringContext eval.config.externals.run.text
     );
     expected = true;

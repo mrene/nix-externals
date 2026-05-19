@@ -214,7 +214,7 @@ let
         };
         value = lib.mkOption {
           type = sourceTreeType;
-          default = config.externals.${extKey}.value;
+          default = builtins.fetchTree config.externals.${extKey}.jsonValue;
           description = "The locked source tree, available once `nix run .#externals-run` has run.";
         };
       };

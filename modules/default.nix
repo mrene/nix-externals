@@ -35,14 +35,17 @@ let
     { name, config, ... }:
     let
       stateDir = topConfig.externals.stateDir.evalPath;
-      valueFile = "${toString stateDir}/${name}.nix";
+      valuePath = "${toString stateDir}/${config.filename}";
       cacheKeyFile = "${toString stateDir}/${name}.cacheKey";
       storedKey =
         if builtins.pathExists cacheKeyFile then
           lib.removeSuffix "\n" (builtins.readFile cacheKeyFile)
         else
           null;
-      ready = builtins.pathExists valueFile && (config.cacheKey == null || storedKey == config.cacheKey);
+      ready = builtins.pathExists valuePath && (config.cacheKey == null || storedKey == config.cacheKey);
+      notReadyThrow =
+        accessor:
+        throw "external '${name}'.${accessor} not ready. Run 'nix run .#externals-run' to materialize.";
     in
     {
       options = {
@@ -50,9 +53,17 @@ let
           type = lib.types.str;
           description = ''
             Shell snippet that materializes this external. The framework exports `$OUT` pointing
-            at `$STATE_DIR/${name}.nix` and `$STATE_DIR` for sidecar files. Write the resolved
-            Nix expression to `$OUT`. The framework only invokes the producer when the external
+            at `$STATE_DIR/${config.filename}` and `$STATE_DIR` for sidecar files. Write the
+            resolved artifact to `$OUT`. The framework only invokes the producer when the external
             is not yet ready, so no in-script self-skip is needed.
+          '';
+        };
+        filename = lib.mkOption {
+          type = lib.types.str;
+          default = name;
+          description = ''
+            Basename of the artifact under `stateDir`. Defaults to the external's name with no
+            extension. Override for ecosystem conventions (e.g. `deps.nix`, `lock.json`).
           '';
         };
         cacheKey = lib.mkOption {
@@ -66,23 +77,47 @@ let
             need to force re-materialization. `null` disables the check (default).
           '';
         };
+        path = lib.mkOption {
+          type = lib.types.str;
+          default = valuePath;
+          readOnly = true;
+          description = ''
+            Absolute path to `$STATE_DIR/${config.filename}`. Always populated, regardless of
+            `ready`. Consumers that need to read the artifact themselves (or pass it to another
+            tool) use this directly.
+          '';
+        };
         ready = lib.mkOption {
           type = lib.types.bool;
           default = ready;
           readOnly = true;
           description = ''
-            True iff `$STATE_DIR/${name}.nix` exists and, when `cacheKey` is set, the matching
+            True iff the artifact at `path` exists and, when `cacheKey` is set, the matching
             `$STATE_DIR/${name}.cacheKey` sidecar holds the same string.
           '';
         };
-        value = lib.mkOption {
+        stringValue = lib.mkOption {
+          type = lib.types.str;
+          default =
+            if ready then lib.removeSuffix "\n" (builtins.readFile valuePath) else notReadyThrow "stringValue";
+          readOnly = true;
+          description = ''
+            Contents of the artifact as a string, trailing newline trimmed. Throws when not
+            ready. For raw bytes (newline included), read `path` directly.
+          '';
+        };
+        jsonValue = lib.mkOption {
           type = lib.types.anything;
           default =
-            if ready then
-              import valueFile
-            else
-              throw "external '${name}' not ready. Run 'nix run .#externals-run' to materialize.";
-          description = "Result of `import \"$STATE_DIR/${name}.nix\"`. Throws when not ready.";
+            if ready then builtins.fromJSON (builtins.readFile valuePath) else notReadyThrow "jsonValue";
+          readOnly = true;
+          description = "Artifact parsed as JSON via `builtins.fromJSON`. Throws when not ready.";
+        };
+        nixValue = lib.mkOption {
+          type = lib.types.anything;
+          default = if ready then import valuePath else notReadyThrow "nixValue";
+          readOnly = true;
+          description = "Artifact loaded via `import`. Throws when not ready.";
         };
       };
     };
@@ -104,8 +139,8 @@ in
   options.externals = lib.mkOption {
     description = ''
       Registry of externally-resolved values. Each `externals.<name>` declares a `producer` snippet
-      that writes `$STATE_DIR/<name>.nix`; the framework reads that file back as `value` and
-      reports `ready` based on its presence.
+      that writes an artifact to `$OUT`; the framework exposes `path`, `ready`, and the lazy
+      decoders `stringValue` / `jsonValue` / `nixValue` for consumers to read it back.
     '';
     default = { };
     type = lib.types.submodule {
@@ -141,7 +176,7 @@ in
       mkdir -p "$STATE_DIR"
       ${lib.concatMapStringsSep "\n" (name: ''
         echo "Running: ${name}"
-        OUT="$STATE_DIR/${name}.nix"
+        OUT="$STATE_DIR/${notReady.${name}.filename}"
         export OUT
         ${lib.getExe producerDrvs.${name}}
         ${

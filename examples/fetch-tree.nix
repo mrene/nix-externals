@@ -1,9 +1,9 @@
 # fetch-tree example - resolves fetchTree inputs to locked source trees.
 #
-# Producer writes a self-contained Nix expression to $STATE_DIR/fetch-tree-<name>.nix
-# of the form `builtins.fetchTree (builtins.fromJSON ''<locked-json>'')`. Framework reads
-# it back as `externals.fetch-tree-<name>.value`; this module also exposes a thin proxy
-# at `fetch-tree.<name>.value` for callers that prefer the per-provider namespace.
+# Producer writes the locked input attrs as JSON to $STATE_DIR/fetch-tree-<name>.json.
+# Framework exposes that JSON via `externals.fetch-tree-<name>.jsonValue`; this module
+# wraps it in `builtins.fetchTree` and re-exports as `fetch-tree.<name>.value` for
+# callers that prefer the per-provider namespace.
 {
   lib,
   config,
@@ -36,20 +36,16 @@ in
     in
     lib.nameValuePair "fetch-tree-${name}" {
       inherit (cfg) cacheKey;
+      filename = "fetch-tree-${name}.json";
       producer = ''
-        locked=$(${lib.getExe' pkgs.nix "nix-instantiate"} --eval --strict --json --expr "
+        ${lib.getExe' pkgs.nix "nix-instantiate"} --eval --strict --json --expr "
           let
             input = builtins.fromJSON (builtins.readFile ${inputFile});
             tree = builtins.fetchTree input;
             locked = { narHash = tree.narHash; }
               // (if tree ? rev then { rev = tree.rev; } else { });
           in input // locked
-        ")
-        cat > "$OUT" <<NIX_EOF
-        builtins.fetchTree (builtins.fromJSON '''
-        $locked
-        ''')
-        NIX_EOF
+        " > "$OUT"
       '';
     }
   ) config.fetch-tree;

@@ -6,7 +6,7 @@ A lot of work in Nix happens out of band. Dependency pins live in a separate `np
 
 
 ## How
-nix-externals is an evalModules module that gives this pattern a uniform shape. Each external is identified by a name; its `producer` is a shell snippet that writes a Nix expression to `$OUT`; the framework reads it back as `value` and reports `ready` based on file presence. A single aggregator (`externals-run`) walks every not-yet-ready entry and runs its producer. The next evaluation picks up the materialized state.
+nix-externals is an evalModules module that gives this pattern a uniform shape. Each external is identified by a name; its `producer` is a shell snippet that writes an artifact to `$OUT`; the framework exposes the resulting `path` and lazy decoders (`stringValue`, `jsonValue`, `nixValue`) for consumers to read it back. `ready` tracks file presence. A single aggregator (`externals-run`) walks every not-yet-ready entry and runs its producer. The next evaluation picks up the materialized state.
 
 This is an experiment. The implementation aims for the minimum needed to be useful; expect rough edges.
 
@@ -59,18 +59,24 @@ lib.evalModules {
 }
 ```
 
-The first evaluation throws: `external 'fetch-tree-dotfiles' not ready. Run 'nix run .#externals-run' to materialize.` Run it; `_externals/fetch-tree-dotfiles.nix` lands with the locked tree; evaluation succeeds; subsequent builds reuse the lock.
+The first evaluation throws: `external 'fetch-tree-dotfiles'.value not ready. Run 'nix run .#externals-run' to materialize.` Run it; `_externals/fetch-tree-dotfiles.json` lands with the locked input; evaluation succeeds; subsequent builds reuse the lock.
 
 ## How it works
 
-Each external is a freeform entry under `externals.<name>` with four sub-options:
+Each external is a freeform entry under `externals.<name>` with these sub-options:
 
-* `producer` — a shell snippet that writes the resolved Nix expression to `$OUT`. The framework wraps it in `pkgs.writeShellApplication` (shellcheck included) and only invokes it when the external is not yet ready, so no self-skip is needed.
+* `producer` — a shell snippet that writes the resolved artifact to `$OUT`. The framework wraps it in `pkgs.writeShellApplication` (shellcheck included) and only invokes it when the external is not yet ready, so no self-skip is needed.
+* `filename` (optional) — basename of the artifact under `stateDir`. Defaults to the external's name with no extension. Override for ecosystem conventions (`deps.nix`, `lock.json`, etc.).
 * `cacheKey` (optional) — a string the framework persists to `$STATE_DIR/<name>.cacheKey` after a successful run and re-checks on every evaluation. Mismatch (or missing sidecar) flips `ready` back to false. `null` (default) disables the check.
-* `ready` — true iff `$STATE_DIR/<name>.nix` exists and, when `cacheKey` is set, the sidecar matches it. Cheap; safe to branch on with `lib.mkIf`.
-* `value` — `import "$STATE_DIR/<name>.nix"` once ready; throws otherwise.
+* `path` — absolute path to `$STATE_DIR/<filename>`. Always populated, regardless of `ready`. Use this when the consumer wants to read the file itself (e.g. `import path { … }` for a function-valued artifact, or pass it as `src` to a derivation).
+* `ready` — true iff `path` exists and, when `cacheKey` is set, the sidecar matches it. Cheap; safe to branch on with `lib.mkIf`.
+* `stringValue` — file contents as a string, trailing newline trimmed. Throws when not ready.
+* `jsonValue` — `builtins.fromJSON` of the file. Throws when not ready.
+* `nixValue` — `import` of the file. Throws when not ready.
 
-When the aggregator at `externals.run` (exposed as `packages.externals-run` under flake-parts) invokes a producer, it exports `$OUT` pointing at `$STATE_DIR/<name>.nix` and `$STATE_DIR` for sidecar files. Ready entries are skipped at evaluation time — the aggregator's script only references producers it actually needs to invoke.
+The three decoders are lazy — only the one a consumer touches is evaluated, so a producer that emits raw text never pays JSON-parse cost.
+
+When the aggregator at `externals.run` (exposed as `packages.externals-run` under flake-parts) invokes a producer, it exports `$OUT` pointing at `$STATE_DIR/<filename>` and `$STATE_DIR` for sidecar files. Ready entries are skipped at evaluation time — the aggregator's script only references producers it actually needs to invoke.
 
 ## Cache-busting
 
@@ -106,25 +112,66 @@ fetch-tree.flake-root.input.github = {
 
 ## Rolling your own
 
-A producer is a shell snippet. Write the resolved Nix expression to `$OUT`:
+A producer is a shell snippet. Write the resolved artifact to `$OUT` and pick the decoder that matches the format you wrote.
+
+JSON (the most common case — `jq`, `curl`, `nix eval --json`, and most CLIs speak it natively):
+
+```nix
+externals.versions = {
+  filename = "versions.json";
+  producer = ''
+    curl -fsSL https://example.com/versions.json > "$OUT"
+  '';
+};
+
+# At your use site:
+config.externals.versions.jsonValue   # { foo = "1.2.3"; bar = "4.5"; }
+```
+
+Plain string (single value — a version, a hash, a date):
+
+```nix
+externals.latest-tag.producer = ''
+  git ls-remote --tags https://example.com/repo.git | tail -1 | cut -f2 > "$OUT"
+'';
+
+config.externals.latest-tag.stringValue   # "v1.2.3"
+```
+
+Nix expression (when the artifact is generated by something that already emits Nix):
 
 ```nix
 externals.codegen.producer = ''
-  # ... compute something ...
-  echo '{ message = "hello"; }' > "$OUT"
+  generate-bindings > "$OUT"   # writes `{ message = "hello"; }`
 '';
 
-# At your use site:
-myValue = config.externals.codegen.value;   # { message = "hello"; }
+config.externals.codegen.nixValue   # { message = "hello"; }
 ```
 
-For sidecar files (extracted archives, fetched keys), the producer writes its scratch state wherever it likes — only `$OUT` (which the framework points at `$STATE_DIR/<name>.nix`) is load-bearing. A common pattern is a sibling directory:
+### Just need a path
+
+For artifacts that the consumer reads itself — a function-valued `deps.nix`, a sidecar to pass as `src`, a directory of fetched assets — use `path` directly. The `.NET fetch-deps` pattern is the canonical case:
+
+```nix
+externals.dotnet-deps = {
+  filename = "deps.nix";
+  producer = ''
+    ${pkgs.dotnetCorePackages.sdk_8_0}/bin/dotnet \
+      ${./fetch-deps.sh} "$OUT"
+  '';
+};
+
+# At the use site (deps.nix is a function `{ fetchNuGet }: [ … ]`):
+nugetDeps = import config.externals.dotnet-deps.path { inherit fetchNuGet; };
+```
+
+For sidecar files (extracted archives, fetched keys), the producer writes its scratch state wherever it likes — only `$OUT` (which the framework points at `$STATE_DIR/<filename>`) is load-bearing. A common pattern is a sibling directory:
 
 ```nix
 externals.assets.producer = ''
   mkdir -p "$STATE_DIR/assets.d"
   curl ... | tar xz -C "$STATE_DIR/assets.d"
-  echo "./assets.d" > "$OUT"     # path resolves relative to assets.nix
+  echo "./assets.d" > "$OUT"     # the consumer reads stringValue + joins with path
 '';
 ```
 
