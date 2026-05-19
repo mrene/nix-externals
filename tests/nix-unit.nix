@@ -17,6 +17,10 @@ let
           producer = ''echo '{}' > "$OUT"'';
           filename = "deps.json";
         };
+        externals.fn-form = {
+          # Function-form producer: aggregator resolves it with its own pkgs.
+          producer = p: ''${p.coreutils}/bin/echo '{}' > "$OUT"'';
+        };
         externals.keyed-match = {
           producer = ''echo '{}' > "$OUT"'';
           cacheKey = "v1";
@@ -33,6 +37,19 @@ let
     ];
     specialArgs = { inherit pkgs; };
   };
+
+  # Data-only evaluation: no pkgs, no aggregator. Proves the read-side layer is
+  # pure data and can be imported into top-level flake-parts trees.
+  dataEval = lib.evalModules {
+    modules = [
+      ../modules/data.nix
+      {
+        externals.stateDir = ./fixtures/_externals;
+        externals.ready-thing.producer = ''echo '{}' > "$OUT"'';
+        externals.pending-thing.producer = ''echo '{}' > "$OUT"'';
+      }
+    ];
+  };
 in
 {
   # Bare-path coercion populates evalPath from the assigned path.
@@ -41,9 +58,9 @@ in
     expected = true;
   };
 
-  # runtimePath defaults to a shell-quoted form of evalPath when unset.
-  testStateDirRuntimeDefault = {
-    expr = builtins.isString eval.config.externals.stateDir.runtimePath;
+  # runtimePath defaults to a shell-quoted form of stateDir.evalPath when unset.
+  testRuntimePathDefault = {
+    expr = builtins.isString eval.config.externals.runtimePath;
     expected = true;
   };
 
@@ -110,9 +127,25 @@ in
     expected = true;
   };
 
-  # Producer is a plain shell snippet (string).
+  # String-form producer is stored as-is.
   testProducerIsString = {
     expr = builtins.isString eval.config.externals.ready-thing.producer;
+    expected = true;
+  };
+
+  # Function-form producer is stored as a function.
+  testProducerIsFunction = {
+    expr = builtins.isFunction eval.config.externals.fn-form.producer;
+    expected = true;
+  };
+
+  # Aggregator resolves the function-form producer (otherwise wrapping the function
+  # as `writeShellApplication.text` would error). The wrapper bin appears in the run
+  # script alongside the other not-ready entries.
+  testRunResolvesFunctionProducer = {
+    expr = lib.hasInfix "/bin/fn-form" (
+      builtins.unsafeDiscardStringContext eval.config.externals.run.text
+    );
     expected = true;
   };
 
@@ -181,5 +214,27 @@ in
       builtins.unsafeDiscardStringContext eval.config.externals.run.text
     );
     expected = true;
+  };
+
+  # Data layer alone (no pkgs) exposes the read-side accessors.
+  testDataLayerReads = {
+    expr = dataEval.config.externals.ready-thing.nixValue;
+    expected = {
+      msg = "hello";
+    };
+  };
+
+  # Data layer alone does not declare `externals.run` — that lives in the aggregator
+  # layer, which requires pkgs. This is what lets the data module live at the
+  # flake-parts top level.
+  testDataLayerHasNoRun = {
+    expr = dataEval.config.externals ? run;
+    expected = false;
+  };
+
+  # Data layer alone does not declare `runtimePath` either.
+  testDataLayerHasNoRuntimePath = {
+    expr = dataEval.config.externals ? runtimePath;
+    expected = false;
   };
 }

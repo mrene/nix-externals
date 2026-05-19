@@ -14,10 +14,12 @@ This is an experiment. The implementation aims for the minimum needed to be usef
 
 `nix-externals` is module system agnostic. It plugs into any evalModules-based system and has no external dependencies. The flake exposes both a flake-parts wrapper and the underlying module set.
 ```nix
-# flake-parts
+# flake-parts — declarations and reads live at the top level; only the aggregator is per-system.
 imports = [ inputs.nix-externals.flakeModule ];
+externals.stateDir = ./_externals;
+externals.foo.producer = ''…'';
 
-# NixOS / home-manager — import the modules and set stateDir yourself
+# NixOS / home-manager — import the full module (data + aggregator).
 imports = [ "${inputs.nix-externals}/modules" ];
 externals.stateDir = ./_externals;
 
@@ -26,9 +28,31 @@ lib.evalModules {
   modules = [ "${nix-externals}/modules" { externals.stateDir = ./_externals; } ];
   specialArgs = { inherit pkgs; };
 }
+
+# Read-only consumer (no pkgs needed) — import the pure data layer.
+imports = [ "${inputs.nix-externals}/modules/data.nix" ];
 ```
 
-`externals.stateDir` accepts either a bare path or a submodule split into `evalPath` (used for `pathExists` checks during Nix evaluation) and `runtimePath` (a shell expression resolved at runtime to the writable state location). The flake-parts entry overrides `runtimePath` to use `flake-root`, so producers write into the live working tree rather than the store-staged source. Bare-path consumers don't need to think about this — the default `runtimePath` derives from `evalPath` directly.
+`externals.stateDir` accepts either a bare path or a submodule with `evalPath` (used for `pathExists` checks during Nix evaluation). The runtime write location is exposed separately as `externals.runtimePath` — a shell expression evaluated by the aggregator. For non-flake-parts users it defaults to the escaped `evalPath`. For flake-parts users it's overridden to resolve via `flake-root`, so producers write into the live working tree rather than the store-staged source.
+
+### Reading externals outside `perSystem`
+
+In flake-parts, declarations live at the top level — so any non-`perSystem` output (`nixosConfigurations`, `flake.lib.*`, `flake.<anything>`) can read `config.externals.<name>.{path, ready, stringValue, jsonValue, nixValue}` directly. From inside `perSystem`, capture the outer `config` via closure:
+
+```nix
+outputs = inputs: inputs.flake-parts.lib.mkFlake { inherit inputs; } (
+  { config, ... }: {
+    externals.versions.producer = ''…'';
+    flake.lib.pinnedVersion = config.externals.versions.stringValue;
+
+    perSystem = { pkgs, ... }: {
+      packages.app = pkgs.runCommand "app" {} ''
+        echo ${config.externals.versions.stringValue} > $out  # outer config
+      '';
+    };
+  }
+);
+```
 
 ## Example
 
@@ -40,22 +64,24 @@ lib.evalModules {
     nix-externals.url = "github:mrene/nix-externals";
   };
 
-  outputs = inputs: inputs.flake-parts.lib.mkFlake { inherit inputs; } {
-    systems = [ "x86_64-linux" "aarch64-darwin" ];
-    imports = [ inputs.nix-externals.flakeModule ];
-
-    perSystem = { pkgs, config, ... }: {
-      imports = [ "${inputs.nix-externals}/examples/fetch-tree.nix" ];
+  outputs = inputs: inputs.flake-parts.lib.mkFlake { inherit inputs; } (
+    { config, ... }: {
+      systems = [ "x86_64-linux" "aarch64-darwin" ];
+      imports = [
+        inputs.nix-externals.flakeModule
+        "${inputs.nix-externals}/examples/fetch-tree.nix"
+      ];
 
       externals.stateDir = ./_externals;
-
       fetch-tree.dotfiles.input = "github:mrene/dotfiles";
 
-      packages.dotfiles = pkgs.runCommand "dotfiles" { } ''
-        ln -s ${config.fetch-tree.dotfiles.value} $out
-      '';
-    };
-  };
+      perSystem = { pkgs, ... }: {
+        packages.dotfiles = pkgs.runCommand "dotfiles" { } ''
+          ln -s ${config.fetch-tree.dotfiles.value} $out
+        '';
+      };
+    }
+  );
 }
 ```
 
@@ -147,6 +173,18 @@ externals.codegen.producer = ''
 
 config.externals.codegen.nixValue   # { message = "hello"; }
 ```
+
+### Producers that reference `pkgs`
+
+When a producer needs `pkgs` (to compose store paths or pull in tools), declare it as a function `pkgs: shellSnippet`. The aggregator applies the function with its own `pkgs` when building the runner. This lets you declare the external at the flake-parts top level even though `pkgs` is per-system:
+
+```nix
+externals.versions.producer = pkgs: ''
+  ${pkgs.curl}/bin/curl -fsSL https://example.com/versions.json > "$OUT"
+'';
+```
+
+The plain-string form (`producer = "…"`) and the function form (`producer = pkgs: "…"`) are interchangeable; use whichever fits the declaration site.
 
 ### Just need a path
 
