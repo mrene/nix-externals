@@ -3,6 +3,7 @@ let
   lib = pkgs.lib;
   nix-externals-lib = import ../lib;
   inherit (nix-externals-lib) mkFodHashProducer readyOr;
+  mkFodHashProducerSource = builtins.readFile ../lib/mk-fod-hash-producer.nix;
   fodHashProducer = mkFodHashProducer { drv = pkgs.hello; };
   fodHashScript = pkgs.callPackage fodHashProducer { };
   fodHashScriptOther = pkgs.callPackage (mkFodHashProducer { drv = pkgs.coreutils; }) { };
@@ -261,6 +262,18 @@ in
   # per-drv state instead of being a constant.
   testMkFodHashProducerParametrizesByDrv = {
     expr = fodHashScript != fodHashScriptOther;
+    expected = true;
+  };
+
+  testMkFodHashProducerBuildsDrvOutput = {
+    expr = lib.hasInfix ''f"{drv_path}^out"'' mkFodHashProducerSource;
+    expected = true;
+  };
+
+  testMkFodHashProducerParsesDerivationShowV4 = {
+    expr =
+      lib.hasInfix ''if "derivations" in data:'' mkFodHashProducerSource
+      && lib.hasInfix ''raw.startswith("sha256-")'' mkFodHashProducerSource;
     expected = true;
   };
 

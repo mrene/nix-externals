@@ -43,7 +43,7 @@ let
     )
 
     proc = subprocess.Popen(
-        [nix_bin, "build", "-L", drv_path],
+        [nix_bin, "build", "-L", "--no-link", f"{drv_path}^out"],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -70,10 +70,28 @@ let
         text=True,
         check=True,
     )
-    raw = json.loads(show.stdout)[drv_path]["outputs"]["out"]["hash"]
-    encoded = codecs.encode(codecs.decode(raw, "hex"), "base64").decode().strip()
+    data = json.loads(show.stdout)
+    if "derivations" in data:
+        drv_key = os.path.basename(drv_path)
+        drv_data = data["derivations"].get(drv_key) or data["derivations"].get(drv_path)
+    else:
+        drv_data = data.get(drv_path) or data.get(os.path.basename(drv_path))
+    if drv_data is None:
+        print(f"Could not find derivation {drv_path} in nix derivation show output", file=sys.stderr)
+        sys.exit(1)
+
+    raw = drv_data["outputs"]["out"]["hash"].strip()
+    if raw.startswith("sha256-"):
+        final = raw
+    else:
+        try:
+            encoded = codecs.encode(codecs.decode(raw, "hex"), "base64").decode().strip()
+        except Exception as e:
+            print(f"Could not normalise output hash {raw!r}: {e}", file=sys.stderr)
+            sys.exit(1)
+        final = f"sha256-{encoded}"
     with open(out_path, "w") as f:
-        f.write(f"sha256-{encoded}")
+        f.write(final)
   '';
 in
 ''
